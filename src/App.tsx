@@ -65,6 +65,9 @@ declare global {
       }) => Promise<{ success: boolean; error?: string; printedFile?: string; noDocument?: boolean }>;
       getUpdateState: () => Promise<UpdateState | null>;
       checkUpdates: () => Promise<UpdateState | null>;
+      downloadUpdate: () => Promise<boolean>;
+      dismissUpdate: () => Promise<boolean>;
+      installUpdate: () => Promise<boolean>;
       getAppVersion: () => Promise<string>;
       onUpdateStatus: (callback: (state: UpdateState | null) => void) => () => void;
     };
@@ -75,7 +78,18 @@ export interface UpdateState {
   status: 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'error' | 'dev';
   version?: string;
   percent?: number;
+  transferred?: number;
+  total?: number;
+  bytesPerSecond?: number;
   error?: string;
+}
+
+/** 82773744 → «79,0 МБ» */
+function formatBytes(bytes?: number): string {
+  if (!bytes || bytes <= 0) return '0 МБ';
+  const mb = bytes / (1024 * 1024);
+  if (mb >= 1) return `${mb.toFixed(1).replace('.', ',')} МБ`;
+  return `${Math.round(bytes / 1024)} КБ`;
 }
 
 export const PRINTERS_CONFIG: Record<string, { label: string; color: string; badgeClass: string }> = {
@@ -377,6 +391,16 @@ export default function App() {
   function handleComplete(order: Order, e?: React.MouseEvent) {
     openCompleteForm(order, e);
   }
+
+  // Обновление: загрузка и установка
+  const handleUpdateNow = () => {
+    window.kabalAPI?.downloadUpdate?.();
+  };
+
+  const handleUpdateLater = () => {
+    window.kabalAPI?.dismissUpdate?.();
+    setUpdateState({ status: 'idle' });
+  };
 
   // Открыть форму завершения с предзаполнением из ТЗ
   const openCompleteForm = (order: Order, e?: React.MouseEvent) => {
@@ -1522,6 +1546,102 @@ export default function App() {
           )}
         </div>
       </main>
+
+      {/* Окно обновления: прогресс загрузки и автоперезапуск */}
+      {updateState && ['available', 'downloading', 'downloaded', 'error'].includes(updateState.status) && (
+        <div className="update-overlay">
+          <div className="update-window">
+            <div className="update-icon">
+              <RefreshCw
+                size={26}
+                className={updateState.status === 'downloading' ? 'spin-icon' : ''}
+              />
+            </div>
+
+            {updateState.status === 'available' && (
+              <>
+                <h2>Доступно обновление</h2>
+                <p className="update-text">
+                  Новая версия <strong>{updateState.version}</strong>. Загрузка начнётся сразу
+                  после нажатия — приложение перезапустится автоматически.
+                </p>
+                <div className="update-actions">
+                  <button className="update-btn-primary" onClick={handleUpdateNow}>
+                    Обновить
+                  </button>
+                  <button className="update-btn-secondary" onClick={handleUpdateLater}>
+                    Позже
+                  </button>
+                </div>
+              </>
+            )}
+
+            {updateState.status === 'downloading' && (
+              <>
+                <h2>Загрузка обновления</h2>
+                <p className="update-text update-version-line">
+                  Версия {updateState.version || ''}
+                </p>
+
+                <div className="update-progress-track">
+                  <div
+                    className="update-progress-fill"
+                    style={{ width: `${Math.min(100, Math.max(0, updateState.percent ?? 0))}%` }}
+                  />
+                </div>
+
+                <div className="update-progress-meta">
+                  <span className="update-percent">{updateState.percent ?? 0}%</span>
+                  <span className="update-bytes">
+                    {formatBytes(updateState.transferred)} из {formatBytes(updateState.total)}
+                    {updateState.bytesPerSecond
+                      ? ` · ${formatBytes(updateState.bytesPerSecond)}/с`
+                      : ''}
+                  </span>
+                </div>
+
+                <p className="update-hint">
+                  Не закрывайте приложение. После загрузки оно перезапустится само.
+                </p>
+              </>
+            )}
+
+            {updateState.status === 'downloaded' && (
+              <>
+                <h2>Установка</h2>
+                <p className="update-text">
+                  Версия {updateState.version} загружена. Приложение перезапустится
+                  через пару секунд.
+                </p>
+                <div className="update-progress-track">
+                  <div className="update-progress-fill" style={{ width: '100%' }} />
+                </div>
+                <div className="update-progress-meta">
+                  <span className="update-percent">100%</span>
+                  <span className="update-bytes">перезапуск…</span>
+                </div>
+              </>
+            )}
+
+            {updateState.status === 'error' && (
+              <>
+                <h2>Не удалось обновить</h2>
+                <p className="update-text update-error-text">
+                  {updateState.error || 'Неизвестная ошибка'}
+                </p>
+                <div className="update-actions">
+                  <button className="update-btn-primary" onClick={() => window.kabalAPI?.checkUpdates?.()}>
+                    Повторить
+                  </button>
+                  <button className="update-btn-secondary" onClick={handleUpdateLater}>
+                    Закрыть
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Форма завершения заявки: F/G/H/I */}
       {completeTarget && (

@@ -9,6 +9,9 @@ contextBridge.exposeInMainWorld('kabalAPI', {
   printOrderDocument: (data) => ipcRenderer.invoke('print-order-document', data),
   getUpdateState: () => ipcRenderer.invoke('get-update-state'),
   checkUpdates: () => ipcRenderer.invoke('check-updates'),
+  downloadUpdate: () => ipcRenderer.invoke('download-update'),
+  dismissUpdate: () => ipcRenderer.invoke('dismiss-update'),
+  installUpdate: () => ipcRenderer.invoke('install-update'),
   getAppVersion: () => ipcRenderer.invoke('app-version'),
   onUpdateStatus: (callback) => {
     const handler = (_event, state) => callback(state);

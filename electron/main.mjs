@@ -310,6 +310,9 @@ async function createWindow() {
 
 ipcMain.handle('get-update-state', () => updater?.getState() ?? null);
 ipcMain.handle('check-updates', async () => { await updater?.check(true); return updater?.getState() ?? null; });
+ipcMain.handle('download-update', () => { updater?.download(); return true; });
+ipcMain.handle('dismiss-update', () => { updater?.dismiss(); return true; });
+ipcMain.handle('install-update', () => { updater?.install(); return true; });
 ipcMain.handle('app-version', () => app.getVersion());
 
 app.whenReady().then(createWindow).catch((error) => console.error('KabalPrint startup failed:', error));

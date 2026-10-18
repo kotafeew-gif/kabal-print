@@ -1,6 +1,6 @@
 {
   "name": "kabal-print",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "private": true,
   "description": "Диспетчер производственных заявок печати: заявки из Google Sheets, взятие в работу, завершение и печать техкарт",
   "author": "Оскар-Принт",
@@ -40,9 +40,10 @@
       "icon": "build/icon.png"
     },
     "nsis": {
-      "oneClick": false,
+      "oneClick": true,
       "perMachine": false,
-      "allowToChangeInstallationDirectory": true,
+      "runAfterFinish": true,
+      "deleteAppDataOnUninstall": false,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "KabalPrint"
