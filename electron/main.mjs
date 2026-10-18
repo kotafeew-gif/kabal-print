@@ -283,9 +283,18 @@ ipcMain.handle('open-folder', async (_event, folderPath) => {
 let mainWindow = null;
 let updater = null;
 
+// В dev-режиме берём иконку из build/, в собранном приложении
+// Electron сам использует иконку из exe.
+const DEV_ICON = path.join(__dirname, '../build/icon.png');
+
 async function createWindow() {
   Menu.setApplicationMenu(null);
-  const window = new BrowserWindow({ width: 1400, height: 900, webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false } });
+  const window = new BrowserWindow({
+    width: 1400,
+    height: 900,
+    icon: app.isPackaged ? undefined : DEV_ICON,
+    webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false },
+  });
   mainWindow = window;
   window.webContents.on('did-fail-load', (_event, code, description, url) => console.error('KabalPrint renderer load failed:', code, description, url));
   window.webContents.on('console-message', (_event, level, message, line, source) => console.log(`[KabalPrint renderer:${level}] ${message} (${source}:${line})`));
