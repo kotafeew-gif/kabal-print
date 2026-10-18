@@ -615,19 +615,16 @@ export default function App() {
           if (!parsed?.paper.toLowerCase().includes(materialFilter.toLowerCase())) return false;
         }
 
-        // Lamination Filter
+        // Lamination Filter — источник истины тот же, что у тегов (detectLamination),
+        // иначе дропдаун и панель тегов показывали разные наборы заявок.
         if (laminationFilter === 'with') {
-          if (!parsed?.lamination || parsed.lamination === '—' || /без\s*ламинац/i.test(parsed.lamination)) {
-            return false;
-          }
+          if (!parsed?.hasLamination) return false;
           // Уточнение по виду ламинации (тег из справочника)
           if (laminationKind !== 'all' && !(parsed?.tags || []).includes(laminationKind)) {
             return false;
           }
         } else if (laminationFilter === 'without') {
-          if (parsed?.lamination && parsed.lamination !== '—' && !/без\s*ламинац/i.test(parsed.lamination)) {
-            return false;
-          }
+          if (parsed?.hasLamination) return false;
         }
 
         // Tag Filter: внутри категории — ИЛИ, между категориями — И

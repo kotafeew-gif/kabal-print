@@ -4,6 +4,8 @@
 // Данные перенесены как есть, исходный проект не изменялся.
 // ─────────────────────────────────────────────────────────────────────────────
 
+import type { LaminationKind } from './lamination.ts';
+
 export type TagCategory = 'product' | 'operation' | 'material' | 'density' | 'lamination';
 
 export interface TagDef {
@@ -12,6 +14,8 @@ export interface TagDef {
   category: TagCategory;
   /** Регулярные выражения для поиска тега в тексте ТЗ. Без флага /g — иначе ломается .test() */
   patterns: RegExp[];
+  /** Тег вычисляется отдельно (ламинация), а не шаблоном по тексту. */
+  computed?: boolean;
 }
 
 export const CATEGORY_LABELS: Record<TagCategory, string> = {
@@ -180,14 +184,13 @@ export const TAGS: TagDef[] = [
   })),
 
   // ── Ламинация ──
-  // Поддерживаем полные («матовая ламинация») и сокращённые («лам. 1+1 мат. 30 мк») написания.
-  // Второй шаблон требует, чтобы «мат»/«глян» стояло НЕПОСРЕДСТВЕННО перед «лам»:
-  // иначе «меловка матовая, глянцевая ламинация» ошибочно считалась матовой ламинацией
-  // (там «матовая» относится к бумаге, а ламинация — глянцевая).
-  { id: 'lam-glyantsevaya', label: 'Глянцевая', category: 'lamination', patterns: p('лам[а-яё]*\\.?[^\\n]{0,25}глян', 'глян[а-яё]*\\.?\\s*лам') },
-  { id: 'lam-matovaya', label: 'Матовая', category: 'lamination', patterns: p('лам[а-яё]*\\.?[^\\n]{0,25}мат(?!ериал)', 'мат[а-яё]*\\.?\\s*лам') },
-  { id: 'lam-soft-touch', label: 'Soft-Touch', category: 'lamination', patterns: p('софт[-\\s]?тач', 'soft[-\\s]?touch') },
-  { id: 'lam-bez', label: 'Без ламинации', category: 'lamination', patterns: p('без\\s*ламинац', 'ламинация\\s*[:\\-]?\\s*нет', 'ламинация\\s*[:\\-]?\\s*—') },
+  // Эти теги не ищутся шаблоном по тексту: вид ламинации определяется
+  // в detectLamination (src/lamination.ts), потому что в составных заявках
+  // «без ламинации» относится к части тиража, а «матовая» может описывать бумагу.
+  { id: 'lam-glyantsevaya', label: 'Глянцевая', category: 'lamination', patterns: [], computed: true },
+  { id: 'lam-matovaya', label: 'Матовая', category: 'lamination', patterns: [], computed: true },
+  { id: 'lam-soft-touch', label: 'Soft-Touch', category: 'lamination', patterns: [], computed: true },
+  { id: 'lam-bez', label: 'Без ламинации', category: 'lamination', patterns: [], computed: true },
 ];
 
 export const TAG_BY_ID: Record<string, TagDef> = Object.fromEntries(TAGS.map((t) => [t.id, t]));
@@ -209,8 +212,19 @@ export function extractTags(text: string, extra = ''): string[] {
   if (!hay.trim()) return [];
   const ids: string[] = [];
   for (const tag of TAGS) {
+    if (tag.computed) continue;
     if (tag.patterns.some((re) => re.test(hay))) ids.push(tag.id);
   }
+  return ids;
+}
+
+/** id тегов ламинации по результату detectLamination. */
+export function laminationTagIds(info: { has: boolean; kinds: LaminationKind[] }): string[] {
+  const ids: string[] = [];
+  if (info.kinds.includes('glossy')) ids.push('lam-glyantsevaya');
+  if (info.kinds.includes('matte')) ids.push('lam-matovaya');
+  if (info.kinds.includes('soft-touch')) ids.push('lam-soft-touch');
+  if (!info.has) ids.push('lam-bez');
   return ids;
 }
 

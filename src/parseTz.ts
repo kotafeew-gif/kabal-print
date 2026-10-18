@@ -1,10 +1,13 @@
-import { extractTags } from './dictionaries.ts';
+import { extractTags, laminationTagIds } from './dictionaries.ts';
+import { detectLamination } from './lamination.ts';
 
 export interface ParsedTz {
   product: string;
   quantity: string;
   paper: string;
   lamination: string;
+  /** Есть ли ламинация вообще (для фильтра «С ламинацией»). */
+  hasLamination: boolean;
   color: string;
   postpress: string[];
   tags: string[];
@@ -156,17 +159,10 @@ export function parseTz(text: string, fallbackPaperQty?: string, fallbackPaperTy
     paper = fallbackPaperType;
   }
 
-  // Ламинация
-  let lamination = findValue(/ламинац/i);
-  if (!lamination) {
-    const lamLine = lines.find((l) => /ламинац|софт-?тач|soft-?touch|матовая\s*\d|глянцевая\s*\d/i.test(l));
-    if (lamLine) {
-      lamination = lamLine.replace(/^[^:]+:\s*/, '').trim();
-    }
-  }
-  if (!lamination && /без\s*ламинац|не\s*требуется/i.test(body)) {
-    lamination = 'Без ламинации';
-  }
+  // Ламинация — определяется отдельным модулем (см. src/lamination.ts):
+  // в составных заявках «без ламинации» относится только к части тиража.
+  const laminationInfo = detectLamination(body);
+  const lamination = laminationInfo.has ? laminationInfo.summary || 'Есть' : '—';
 
   // Цветность
   let color = findValue(/цветность|печать/i);
@@ -190,10 +186,14 @@ export function parseTz(text: string, fallbackPaperQty?: string, fallbackPaperTy
     product,
     quantity: quantity || '—',
     paper: paper || 'Не указана',
-    lamination: lamination || '—',
+    lamination,
+    hasLamination: laminationInfo.has,
     color: color || '',
     postpress: postpressItems,
-    tags: extractTags(body, [fallbackPaperType, fallbackPaperQty].filter(Boolean).join(' ')),
+    tags: [
+      ...extractTags(body, [fallbackPaperType, fallbackPaperQty].filter(Boolean).join(' ')),
+      ...laminationTagIds(laminationInfo),
+    ],
     folderPath,
     lines,
   };
