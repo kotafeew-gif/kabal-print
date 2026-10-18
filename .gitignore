@@ -1,0 +1,29 @@
+# Зависимости
+node_modules/
+
+# Сборка
+dist/
+release/
+
+# Секреты — НИКОГДА не коммитить
+credentials/
+google-key.json
+*.key.json
+.env
+.env.local
+.env.*.local
+
+# Логи и резервные копии
+*.log
+*.bak
+*.bak-*
+
+# Архивы исходников
+kabalprint.zip
+
+# ОС и редакторы
+Thumbs.db
+desktop.ini
+.DS_Store
+.vscode/
+.idea/

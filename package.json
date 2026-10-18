@@ -1,0 +1,52 @@
+{
+  "name": "kabal-print",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Диспетчер производственных заявок печати: заявки из Google Sheets, взятие в работу, завершение и печать техкарт",
+  "author": "Оскар-Принт",
+  "license": "UNLICENSED",
+  "type": "module",
+  "main": "electron/main.mjs",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "start": "electron .",
+    "dist": "vite build && electron-builder"
+  },
+  "dependencies": {
+    "googleapis": "^171.4.0",
+    "lucide-react": "^0.546.0",
+    "react": "19.2.3",
+    "react-dom": "19.2.3"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "@vitejs/plugin-react": "5.1.1",
+    "electron": "31.0.0",
+    "electron-builder": "^24.13.3",
+    "tailwindcss": "^4.3.3",
+    "vite": "7.2.4"
+  },
+  "build": {
+    "appId": "com.oskarprint.kabalprint",
+    "artifactName": "kabal-print-setup-${version}.${ext}",
+    "productName": "KabalPrint",
+    "directories": {
+      "output": "release"
+    },
+    "win": {
+      "target": "nsis"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "credentials/google-key.json",
+        "to": "google-key.json"
+      }
+    ]
+  }
+}
