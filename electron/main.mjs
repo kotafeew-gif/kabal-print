@@ -7,6 +7,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { DOC_EXTENSIONS, pickOrderDocument, readTextFile, escapeHtml } from './documents.mjs';
+import { setupUpdater } from './updater.mjs';
 
 const execFileAsync = promisify(execFile);
 
@@ -279,12 +280,28 @@ ipcMain.handle('open-folder', async (_event, folderPath) => {
   }
 });
 
+let mainWindow = null;
+let updater = null;
+
 async function createWindow() {
   Menu.setApplicationMenu(null);
   const window = new BrowserWindow({ width: 1400, height: 900, webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false } });
+  mainWindow = window;
   window.webContents.on('did-fail-load', (_event, code, description, url) => console.error('KabalPrint renderer load failed:', code, description, url));
   window.webContents.on('console-message', (_event, level, message, line, source) => console.log(`[KabalPrint renderer:${level}] ${message} (${source}:${line})`));
+  window.on('closed', () => { if (mainWindow === window) mainWindow = null; });
   await window.loadFile(path.join(__dirname, '../dist/index.html'));
+
+  // Автообновление: проверяем при запуске, через 5 секунд после отрисовки
+  updater = setupUpdater({
+    getWindow: () => (mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined),
+  });
+  setTimeout(() => updater?.check(), 5000);
 }
+
+ipcMain.handle('get-update-state', () => updater?.getState() ?? null);
+ipcMain.handle('check-updates', async () => { await updater?.check(true); return updater?.getState() ?? null; });
+ipcMain.handle('app-version', () => app.getVersion());
+
 app.whenReady().then(createWindow).catch((error) => console.error('KabalPrint startup failed:', error));
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });

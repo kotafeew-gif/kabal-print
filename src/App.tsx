@@ -63,8 +63,19 @@ declare global {
         folderPath?: string;
         orderNumber?: string;
       }) => Promise<{ success: boolean; error?: string; printedFile?: string; noDocument?: boolean }>;
+      getUpdateState: () => Promise<UpdateState | null>;
+      checkUpdates: () => Promise<UpdateState | null>;
+      getAppVersion: () => Promise<string>;
+      onUpdateStatus: (callback: (state: UpdateState | null) => void) => () => void;
     };
   }
+}
+
+export interface UpdateState {
+  status: 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'error' | 'dev';
+  version?: string;
+  percent?: number;
+  error?: string;
 }
 
 export const PRINTERS_CONFIG: Record<string, { label: string; color: string; badgeClass: string }> = {
@@ -222,6 +233,8 @@ export default function App() {
   const [isElectron, setIsElectron] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [copiedOrderId, setCopiedOrderId] = useState<string | null>(null);
+  const [appVersion, setAppVersion] = useState('');
+  const [updateState, setUpdateState] = useState<UpdateState | null>(null);
 
   const DEFAULT_COL_WIDTHS = [85, 175, 160, 145, 115, 78, 250, 180, 120, 125];
   const [colWidths, setColWidths] = useState<number[]>(() => {
@@ -299,6 +312,18 @@ export default function App() {
     load();
     const id = setInterval(load, 15000);
     return () => clearInterval(id);
+  }, []);
+
+  // Версия приложения и подписка на статус обновлений
+  useEffect(() => {
+    const api = window.kabalAPI;
+    if (!api) return;
+    api.getAppVersion?.().then((v) => setAppVersion(v)).catch(() => {});
+    api.getUpdateState?.().then((s) => s && setUpdateState(s)).catch(() => {});
+    const unsubscribe = api.onUpdateStatus?.((s) => setUpdateState(s));
+    return () => {
+      if (typeof unsubscribe === 'function') unsubscribe();
+    };
   }, []);
 
   // Claim Order
@@ -710,8 +735,29 @@ export default function App() {
           <div>
             <div className="brand-title-wrap">
               <h1>Оскар-Принт Производство</h1>
-              <span className="version-pill">v0.1.0</span>
+              <button
+                className={`version-pill ${updateState?.status === 'checking' ? 'checking' : ''}`}
+                onClick={() => window.kabalAPI?.checkUpdates?.()}
+                title={isElectron ? 'Проверить обновления' : 'Проверка обновлений доступна в приложении'}
+              >
+                v{appVersion || '1.0.0'}
+              </button>
               {!isElectron && <span className="badge-preview">Веб-режим</span>}
+              {updateState?.status === 'available' && (
+                <span className="badge-update" title="Доступно обновление приложения">
+                  Обновление {updateState.version}
+                </span>
+              )}
+              {updateState?.status === 'downloading' && (
+                <span className="badge-update" title="Идёт загрузка обновления">
+                  Загрузка {updateState.percent ?? 0}%
+                </span>
+              )}
+              {updateState?.status === 'downloaded' && (
+                <span className="badge-update" title="Обновление загружено, перезапустите приложение">
+                  Готово к установке
+                </span>
+              )}
             </div>
             <p className="brand-subtitle">Компактный диспетчер производственных заявок печати</p>
           </div>
