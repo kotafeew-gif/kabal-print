@@ -23,7 +23,7 @@ import {
   FolderOpen
 } from 'lucide-react';
 import './style.css';
-import { TAG_BY_ID, TAGS_BY_CATEGORY, CATEGORY_LABELS, CATEGORY_ORDER, type TagCategory } from './dictionaries';
+import { TAG_BY_ID, TAGS_BY_CATEGORY, CATEGORY_LABELS, CATEGORY_ORDER, PRODUCT_TYPES, type TagCategory } from './dictionaries';
 import { parseTz, type ParsedTz } from './parseTz';
 
 export type { ParsedTz };
@@ -616,6 +616,8 @@ export default function App() {
   }, [orders, parsedOrdersMap]);
 
   const availableProducts = useMemo(() => {
+    // Полный справочник видов продукции (как у менеджеров) + виды, найденные
+    // в текущих заявках. «Другое...» — служебный пункт формы, в фильтр не попадает.
     const set = new Set<string>();
     orders.forEach((o) => {
       const parsed = parsedOrdersMap.get(o.rowNumber);
@@ -623,7 +625,10 @@ export default function App() {
         set.add(parsed.product);
       }
     });
-    return Array.from(set).sort();
+    PRODUCT_TYPES.forEach((p) => {
+      if (p !== 'Другое...') set.add(p);
+    });
+    return Array.from(set).sort((a, b) => a.localeCompare(b, 'ru'));
   }, [orders, parsedOrdersMap]);
 
   // Status counts
@@ -1056,7 +1061,7 @@ export default function App() {
                 <option value="all">Любой вид</option>
                 <option value="lam-glyantsevaya">Глянцевая</option>
                 <option value="lam-matovaya">Матовая</option>
-                <option value="lam-soft-touch">Soft-Touch</option>
+                <option value="lam-soft-touch">Софт-тач (Soft-Touch)</option>
               </select>
             </div>
           )}

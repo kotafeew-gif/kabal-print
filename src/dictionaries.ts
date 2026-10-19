@@ -33,7 +33,7 @@ export const PRODUCT_TYPES = [
   'Визитки', 'Листовки', 'Буклеты', 'Флаеры', 'Брошюры', 'Каталоги',
   'Воблеры', 'Бейджи', 'Календари', 'Плакаты', 'Наклейки', 'Открытка',
   'Конверты', 'Сертификаты', 'Бланки', 'Папки', 'Блокноты', 'Кубарики',
-  'Бумажные Пакеты', 'Другое...',
+  'Бумажные Пакеты', 'Меню', 'Грамоты', 'Другое...',
 ];
 
 // ─── Операции / работы ───────────────────────────────────────────────────────
@@ -95,7 +95,8 @@ export const MATERIAL_NAMES = [
 export const DENSITIES = ['80', '90', '100', '115', '130', '150', '170', '200', '250', '270', '300', '350', '400'];
 
 // ─── Ламинация (DEFAULT_LAMINATION_KINDS) ────────────────────────────────────
-export const LAMINATION_NAMES = ['Глянцевая', 'Матовая', 'Soft-Touch', 'Без ламинации'];
+// Синхронизировано с программой менеджеров: «Софт (Soft-Touch)», «Нестандартный».
+export const LAMINATION_NAMES = ['Глянцевая', 'Матовая', 'Софт (Soft-Touch)', 'Нестандартный', 'Без ламинации'];
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Определения тегов с шаблонами поиска.
@@ -189,7 +190,7 @@ export const TAGS: TagDef[] = [
   // «без ламинации» относится к части тиража, а «матовая» может описывать бумагу.
   { id: 'lam-glyantsevaya', label: 'Глянцевая', category: 'lamination', patterns: [], computed: true },
   { id: 'lam-matovaya', label: 'Матовая', category: 'lamination', patterns: [], computed: true },
-  { id: 'lam-soft-touch', label: 'Soft-Touch', category: 'lamination', patterns: [], computed: true },
+  { id: 'lam-soft-touch', label: 'Софт-тач (Soft-Touch)', category: 'lamination', patterns: [], computed: true },
   { id: 'lam-bez', label: 'Без ламинации', category: 'lamination', patterns: [], computed: true },
 ];
 
