@@ -17,8 +17,8 @@ const SHEET_TITLE = 'Печать_2026';
 const KEY_PATH = app.isPackaged
   ? path.join(process.resourcesPath, 'google-key.json')
   : path.join(__dirname, '../credentials/google-key.json');
-const PRINTERS = { В: { label: 'Валера', color: { red: 0.761, green: 0.482, blue: 0.627 } }, к: { label: 'Андрей', color: { red: 0, green: 1, blue: 1 } }, m: { label: 'Коля', color: { red: 0.29, green: 0.525, blue: 0.91 } } };
-const PRINTER_NAME_TO_KEY = { 'Валера': 'В', 'Андрей': 'к', 'Коля': 'm' };
+const PRINTERS = { в: { label: 'Валера', color: { red: 0.761, green: 0.482, blue: 0.627 } }, к: { label: 'Андрей', color: { red: 0, green: 1, blue: 1 } }, m: { label: 'Коля', color: { red: 0.29, green: 0.525, blue: 0.91 } } };
+const PRINTER_NAME_TO_KEY = { 'Валера': 'в', 'Андрей': 'к', 'Коля': 'm' };
 const DONE_COLOR = { red: 1, green: 1, blue: 0 }; // #ffff00
 
 function sheetsClient() {
@@ -64,8 +64,14 @@ async function getOrders() {
   const rows = values.data.values || [];
   return rows.map((row, index) => {
     const yValue = String(row[24] || '').trim();
-    const printerKey = PRINTER_NAME_TO_KEY[yValue] || '';
     const isCompleted = yValue === 'Готово';
+    let printerKey = PRINTER_NAME_TO_KEY[yValue] || '';
+    // В завершённых заявках в Y стоит «Готово» и имя печатника оттуда не достать,
+    // но буква печатника осталась в J — берём её, чтобы было видно, кто делал заявку
+    if (!printerKey && isCompleted) {
+      const jLetter = String(row[9] || '').trim();
+      if (PRINTERS[jLetter]) printerKey = jLetter;
+    }
     return {
       rowNumber: index + 1,
       orderNumber: String(row[0] || '').trim(),
@@ -283,16 +289,19 @@ ipcMain.handle('open-folder', async (_event, folderPath) => {
 let mainWindow = null;
 let updater = null;
 
-// В dev-режиме берём иконку из build/, в собранном приложении
-// Electron сам использует иконку из exe.
-const DEV_ICON = path.join(__dirname, '../build/icon.png');
+// Иконку задаём явно и в собранном приложении: Windows берёт её для окна
+// и панели задач (иначе кэш показывает старую иконку из предыдущей версии).
+// В собранном приложении иконка кладётся в resources (extraResources).
+const APP_ICON = app.isPackaged
+  ? path.join(process.resourcesPath, 'icon.png')
+  : path.join(__dirname, '../build/icon.png');
 
 async function createWindow() {
   Menu.setApplicationMenu(null);
   const window = new BrowserWindow({
     width: 1400,
     height: 900,
-    icon: app.isPackaged ? undefined : DEV_ICON,
+    icon: APP_ICON,
     webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false },
   });
   mainWindow = window;
@@ -317,3 +326,7 @@ ipcMain.handle('app-version', () => app.getVersion());
 
 app.whenReady().then(createWindow).catch((error) => console.error('KabalPrint startup failed:', error));
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
+
+// Связывает окно с идентификатором приложения: иконка в панели задач и группировка
+// кнопки берутся из AppUserModelID, а не из устаревшего кэша Windows.
+app.setAppUserModelId('com.oskarprint.kabalprint');

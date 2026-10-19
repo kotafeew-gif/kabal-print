@@ -93,7 +93,7 @@ function formatBytes(bytes?: number): string {
 }
 
 export const PRINTERS_CONFIG: Record<string, { label: string; color: string; badgeClass: string }> = {
-  В: { label: 'Валера', color: '#c27ba0', badgeClass: 'badge-valera' },
+  в: { label: 'Валера', color: '#c27ba0', badgeClass: 'badge-valera' },
   к: { label: 'Андрей', color: '#00ffff', badgeClass: 'badge-andrey' },
   m: { label: 'Коля', color: '#4a86e8', badgeClass: 'badge-kolya' },
 };
@@ -134,7 +134,7 @@ const INITIAL_MOCK_ORDERS: Order[] = [
     paperType: '250г/м² матовая',
     colorMode: '4+4',
     note: 'Клиент заберет самовывозом в 15:00',
-    printer: 'В',
+    printer: 'в',
     manager: 'Максим',
     completed: false,
   },
@@ -225,7 +225,7 @@ export default function App() {
   const [query, setQuery] = useState('');
   const [sortBy, setSortBy] = useState<string>('number');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
-  const [statusFilter, setStatusFilter] = useState<'all' | 'free' | 'my' | 'В' | 'к' | 'm'>('all');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'free' | 'my' | 'в' | 'к' | 'm'>('all');
   const [materialFilter, setMaterialFilter] = useState<string>('all');
   const [laminationFilter, setLaminationFilter] = useState<string>('all');
   const [laminationKind, setLaminationKind] = useState<string>('all');
@@ -242,6 +242,44 @@ export default function App() {
   const [completeColor, setCompleteColor] = useState('');
   const [completePostpress, setCompletePostpress] = useState('');
   const [isCompleting, setIsCompleting] = useState(false);
+
+  // Черновик формы завершения: если закрыть окно, не завершив заявку, введённое
+  // сохранится в localStorage именно для этой заявки (ключ — номер строки листа).
+  const completeDraftKey = (rowNumber: number) => `kabal-complete-draft-${rowNumber}`;
+
+  const loadCompleteDraft = (rowNumber: number): { papers: Array<{ qty: string; density: string }> | null; color: string; postpress: string } | null => {
+    try {
+      const raw = localStorage.getItem(completeDraftKey(rowNumber));
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object') return null;
+      return {
+        papers: Array.isArray(parsed.papers) && parsed.papers.length ? (parsed.papers as Array<{ qty: string; density: string }>) : null,
+        color: typeof parsed.color === 'string' ? parsed.color : '',
+        postpress: typeof parsed.postpress === 'string' ? parsed.postpress : '',
+      };
+    } catch {
+      return null;
+    }
+  };
+
+  const clearCompleteDraft = (rowNumber: number) => {
+    try {
+      localStorage.removeItem(completeDraftKey(rowNumber));
+    } catch {}
+  };
+
+  // Автосохранение черновика при любом изменении полей формы
+  useEffect(() => {
+    if (!completeTarget) return;
+    try {
+      localStorage.setItem(
+        completeDraftKey(completeTarget.rowNumber),
+        JSON.stringify({ papers: completePapers, color: completeColor, postpress: completePostpress }),
+      );
+    } catch {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [completePapers, completeColor, completePostpress, completeTarget]);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [isElectron, setIsElectron] = useState(false);
@@ -405,6 +443,20 @@ export default function App() {
   // Открыть форму завершения с предзаполнением из ТЗ
   const openCompleteForm = (order: Order, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
+
+    // Если форму для этой заявки уже открывали и закрывали без завершения —
+    // вернуть сохранённый черновик вместо предзаполнения из ТЗ
+    const draft = loadCompleteDraft(order.rowNumber);
+    if (draft) {
+      setCompletePapers(draft.papers && draft.papers.length ? draft.papers : [{ qty: '', density: '' }]);
+      setCompleteColor(draft.color);
+      setCompletePostpress(draft.postpress);
+      setCompleteTarget(order);
+      setError('');
+      setNotice('');
+      return;
+    }
+
     const parsed = parsedOrdersMap.get(order.rowNumber) || parseTz(order.tz);
 
     // Плотности бумаги из ТЗ — каждая становится отдельной строкой (листов = пусто)
@@ -474,6 +526,7 @@ export default function App() {
         setOrders([...localMockOrders]);
       }
       closeCompleteForm();
+      clearCompleteDraft(completeTarget.rowNumber);
       await load();
     } catch (err: any) {
       setError(err.message || 'Ошибка завершения заявки');
@@ -591,15 +644,20 @@ export default function App() {
   const filteredOrders = useMemo(() => {
     return orders
       .filter((order) => {
-        // Completed toggle
-        if (!showCompleted && order.completed) return false;
+        const q = query.trim().toLowerCase();
+        const matchNumber = q !== '' && order.orderNumber.toLowerCase().includes(q);
+        const matchClient = q !== '' && order.client.toLowerCase().includes(q);
+
+        // Completed toggle: если идёт поиск по номеру заявки или заказчику —
+        // выполненные заявки показываем тоже, галочка «Показать архив» не нужна
+        if (!showCompleted && order.completed && !matchNumber && !matchClient) return false;
 
         // Status Filter
         if (statusFilter === 'free' && order.printer) return false;
         if (statusFilter === 'my') {
           if (!printer || order.printer !== printer) return false;
         }
-        if (statusFilter === 'В' && order.printer !== 'В') return false;
+        if (statusFilter === 'в' && order.printer !== 'в') return false;
         if (statusFilter === 'к' && order.printer !== 'к') return false;
         if (statusFilter === 'm' && order.printer !== 'm') return false;
 
@@ -644,10 +702,7 @@ export default function App() {
         }
 
         // Search Query
-        if (query.trim()) {
-          const q = query.toLowerCase();
-          const matchNumber = order.orderNumber.toLowerCase().includes(q);
-          const matchClient = order.client.toLowerCase().includes(q);
+        if (q) {
           const matchTz = order.tz.toLowerCase().includes(q);
           const matchManager = order.manager.toLowerCase().includes(q);
           const matchPaper = (order.paperType || '').toLowerCase().includes(q);
@@ -734,6 +789,20 @@ export default function App() {
     }
     return map;
   }, [orders, parsedOrdersMap]);
+
+  // Срок сдачи «сегодня» — выделяем, чтобы сразу было видно, что заявка сдаётся сегодня
+  const parseDeadlineDate = (deadline: string): Date | null => {
+    const m = deadline.match(/(\d{2})\.(\d{2})\.(\d{4})/);
+    if (!m) return null;
+    return new Date(+m[3], +m[2] - 1, +m[1]);
+  };
+
+  const isDeadlineToday = (deadline: string): boolean => {
+    const d = parseDeadlineDate(deadline);
+    if (!d) return false;
+    const now = new Date();
+    return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
+  };
 
   const getUrgencyBadge = (deadline: string) => {
     if (!deadline) return null;
@@ -921,7 +990,7 @@ export default function App() {
               <option value="all">Все статусы</option>
               <option value="free">🟢 Только свободные (не в работе)</option>
               {printer && <option value="my">👤 Только мои ({PRINTERS_CONFIG[printer]?.label})</option>}
-              <option value="В">Валера (В)</option>
+              <option value="в">Валера (в)</option>
               <option value="к">Андрей (к)</option>
               <option value="m">Коля (m)</option>
             </select>
@@ -1228,10 +1297,11 @@ export default function App() {
                             {order.created || '—'}
                           </span>
                           <span className="date-arrow">→</span>
-                          <span className="date-deadline" title="Срок сдачи">
+                          <span className={`date-deadline ${isDeadlineToday(order.deadline) ? 'today' : ''}`} title="Срок сдачи">
                             {order.deadline || '—'}
                           </span>
                         </div>
+                        {isDeadlineToday(order.deadline) && <span className="urgency-badge today">Сегодня</span>}
                         {getUrgencyBadge(order.deadline)}
                       </div>
 
@@ -1329,6 +1399,7 @@ export default function App() {
                           <span className="status-badge badge-done">
                             <CheckCircle2 size={13} />
                             Готово
+                            {printerConfig?.label && <span className="status-printer-name">· {printerConfig.label}</span>}
                           </span>
                         ) : order.printer ? (
                           <span className={`status-badge ${printerConfig?.badgeClass || 'badge-claimed'}`}>
@@ -1406,6 +1477,18 @@ export default function App() {
                               <div className="meta-row">
                                 <span className="meta-key">Менеджер:</span>
                                 <span className="meta-val">{order.manager || '—'}</span>
+                              </div>
+                              <div className="meta-row">
+                                <span className="meta-key">Печатник:</span>
+                                <span className="meta-val">
+                                  {order.printer && PRINTERS_CONFIG[order.printer] ? (
+                                    <span className={`printer-chip ${PRINTERS_CONFIG[order.printer].badgeClass || ''}`}>
+                                      {PRINTERS_CONFIG[order.printer].label}
+                                    </span>
+                                  ) : (
+                                    '—'
+                                  )}
+                                </span>
                               </div>
                               <div className="meta-row">
                                 <span className="meta-key">Дата создания:</span>
@@ -1654,7 +1737,17 @@ export default function App() {
               <button className="btn-modal-close" onClick={closeCompleteForm}>×</button>
             </div>
 
-            <div className="modal-body">
+            <div className="modal-body complete-body">
+              {/* ТЗ заявки — дублируется слева, чтобы не забыть, что было заказано */}
+              <aside className="complete-tz">
+                <div className="complete-tz-head">
+                  <h3>ТЗ заявки</h3>
+                  <span className="complete-tz-num">№ {completeTarget.orderNumber}</span>
+                </div>
+                <pre className="complete-tz-text">{completeTarget.tz || 'ТЗ не заполнено'}</pre>
+              </aside>
+
+              <div className="complete-form">
               {/* F + G: бумага */}
               <div className="complete-section">
                 <div className="complete-section-head">
@@ -1734,6 +1827,7 @@ export default function App() {
                 <p className="complete-hint">
                   Всё, что было сделано кроме печати. Значения взяты из ТЗ — поправьте при необходимости.
                 </p>
+              </div>
               </div>
             </div>
 

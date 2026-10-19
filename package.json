@@ -1,6 +1,6 @@
 {
   "name": "kabal-print",
-  "version": "1.0.3",
+  "version": "1.0.6",
   "private": true,
   "description": "Диспетчер производственных заявок печати: заявки из Google Sheets, взятие в работу, завершение и печать техкарт",
   "author": "Оскар-Принт",
@@ -65,6 +65,10 @@
       {
         "from": "credentials/google-key.json",
         "to": "google-key.json"
+      },
+      {
+        "from": "build/icon.png",
+        "to": "icon.png"
       }
     ]
   }

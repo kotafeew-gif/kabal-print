@@ -537,19 +537,31 @@ body {
   overflow: visible;
 }
 
-/* Column resize handles */
+/* Column resize handles — видимая полоска-граница, за которую можно тянуть */
 .resize-handle {
   position: absolute;
   right: 0;
   top: 0;
   bottom: 0;
-  width: 4px;
+  width: 8px;
   cursor: col-resize;
   z-index: 10;
-  transition: background-color 0.15s ease;
 }
-.resize-handle:hover {
+.resize-handle::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 2px;
+  background: #a8b6c7;
+  transition: background-color 0.15s ease, width 0.15s ease;
+}
+.resize-handle:hover::after,
+.resize-handle:active::after {
   background: #3b82f6;
+  width: 4px;
 }
 
 /* ================= TAG FILTER ================= */
@@ -989,7 +1001,10 @@ body {
 }
 
 .order-row-group {
-  border-bottom: 1px solid #f1f5f9;
+  position: relative;
+  margin: 3px 0;
+  border: 1px solid #d8dee6;
+  border-radius: 8px;
   transition: background-color 0.15s ease;
   /* Мягкая подкраска в цвет печатника (задаётся инлайном) */
   background-color: var(--row-tint, transparent);
@@ -1093,6 +1108,14 @@ body {
   font-size: 12px;
 }
 
+.date-deadline.today {
+  color: #dc2626;
+  font-weight: 800;
+  text-decoration: underline;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 2px;
+}
+
 .urgency-badge {
   display: inline-block;
   font-size: 10px;
@@ -1107,6 +1130,20 @@ body {
   background: #fee2e2;
   color: #dc2626;
   border: 1px solid #fca5a5;
+}
+
+.urgency-badge.today {
+  background: #fff7ed;
+  color: #c2410c;
+  border: 1px solid #fdba74;
+}
+
+/* Имя печатника внутри бейджа «Готово» — чуть мельче и полупрозрачнее,
+   чтобы не перебивать сам статус */
+.status-printer-name {
+  font-weight: 600;
+  opacity: 0.75;
+  white-space: nowrap;
 }
 
 /* Client */
@@ -1835,7 +1872,77 @@ body {
 
 /* ================= COMPLETE ORDER FORM ================= */
 .complete-modal {
-  width: min(680px, 100%);
+  width: min(960px, 100%);
+}
+
+/* Две колонки: слева ТЗ, справа поля формы */
+.complete-body {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  gap: 20px;
+  align-items: start;
+}
+
+.complete-tz {
+  position: sticky;
+  top: 0;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 12px 14px;
+  max-height: 60vh;
+  min-height: 120px;
+  overflow-y: auto;
+}
+
+.complete-tz-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.complete-tz-head h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: #334155;
+}
+
+.complete-tz-num {
+  font-size: 11px;
+  font-weight: 700;
+  color: #1d4ed8;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 6px;
+  padding: 2px 8px;
+  white-space: nowrap;
+}
+
+.complete-tz-text {
+  margin: 0;
+  font-family: inherit;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: #334155;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.complete-form {
+  min-width: 0;
+}
+
+@media (max-width: 768px) {
+  .complete-body {
+    grid-template-columns: 1fr;
+  }
+  .complete-tz {
+    position: static;
+    max-height: 32vh;
+  }
 }
 
 .complete-section {
