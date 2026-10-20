@@ -240,6 +240,7 @@ export default function App() {
   const [printer, setPrinter] = useState('');
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [query, setQuery] = useState('');
+  const [sortBy, setSortBy] = useState<string>('deadline');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
   const [statusFilter, setStatusFilter] = useState<'all' | 'free' | 'my' | 'в' | 'к' | 'm'>('all');
   const [materialFilter, setMaterialFilter] = useState<string>('all');
@@ -736,12 +737,35 @@ export default function App() {
         return true;
       })
       .sort((a, b) => {
-        const aDate = parseDateTimeValue(a.deadline);
-        const bDate = parseDateTimeValue(b.deadline);
-        // Единственная сортировка списка — по сроку сдачи.
-        const cmp = Number.isNaN(aDate) || Number.isNaN(bDate)
-          ? (a.deadline || '').localeCompare(b.deadline || '', 'ru')
-          : aDate - bDate;
+        const parsedA = parsedOrdersMap.get(a.rowNumber);
+        const parsedB = parsedOrdersMap.get(b.rowNumber);
+        const countOperations = (tags?: string[]) =>
+          (tags || []).filter((id) => TAG_BY_ID[id]?.category === 'operation').length;
+        let cmp = 0;
+
+        if (sortBy === 'number') {
+          cmp = (Number(a.orderNumber) || 0) - (Number(b.orderNumber) || 0);
+        } else if (sortBy === 'deadline') {
+          const aDate = parseDateTimeValue(a.deadline);
+          const bDate = parseDateTimeValue(b.deadline);
+          cmp = Number.isNaN(aDate) || Number.isNaN(bDate)
+            ? (a.deadline || '').localeCompare(b.deadline || '', 'ru')
+            : aDate - bDate;
+        } else if (sortBy === 'client') {
+          cmp = (a.client || '').localeCompare(b.client || '', 'ru');
+        } else if (sortBy === 'product') {
+          cmp = (parsedA?.product || '').localeCompare(parsedB?.product || '', 'ru');
+        } else if (sortBy === 'quantity') {
+          cmp = (parsedA?.quantity || '').localeCompare(parsedB?.quantity || '', 'ru', { numeric: true });
+        } else if (sortBy === 'paper') {
+          cmp = (parsedA?.paper || '').localeCompare(parsedB?.paper || '', 'ru');
+        } else if (sortBy === 'folder') {
+          cmp = (parsedA?.folderPath || '').localeCompare(parsedB?.folderPath || '', 'ru');
+        } else if (sortBy === 'operations') {
+          cmp = countOperations(parsedA?.tags) - countOperations(parsedB?.tags);
+        } else if (sortBy === 'printer') {
+          cmp = (a.printer || '').localeCompare(b.printer || '', 'ru');
+        }
 
         return sortDirection === 'asc' ? cmp : -cmp;
       });
@@ -756,12 +780,18 @@ export default function App() {
     laminationKind,
     selectedTags,
     query,
+    sortBy,
     sortDirection,
     parsedOrdersMap,
   ]);
 
-  const toggleDeadlineSort = () => {
-    setSortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'));
+  const toggleSort = (field: string) => {
+    if (sortBy === field) {
+      setSortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortBy(field);
+      setSortDirection('asc');
+    }
   };
 
   const toggleTag = (id: string) => {
@@ -1171,46 +1201,49 @@ export default function App() {
         <div className="compact-table-container">
           {/* Table Header with interactive sort clicks */}
           <div className="compact-table-header" style={gridStyle}>
-            <div className="col col-num">
+            <div className="col col-num" onClick={() => toggleSort('number')}>
               <span>№ Заявки</span>
+              {sortBy === 'number' && (sortDirection === 'asc' ? ' ↑' : ' ↓')}
               <div className="resize-handle" onMouseDown={(e) => handleResizeStart(0, e)} />
             </div>
-            <div className="col col-dates" onClick={toggleDeadlineSort}>
+            <div className="col col-dates" onClick={() => toggleSort('deadline')}>
               <span>Срок сдачи</span>
-              {sortDirection === 'asc' ? ' ↑' : ' ↓'}
+              {sortBy === 'deadline' && (sortDirection === 'asc' ? ' ↑' : ' ↓')}
               <div className="resize-handle" onMouseDown={(e) => handleResizeStart(1, e)} />
             </div>
-            <div className="col col-client">
+            <div className="col col-client" onClick={() => toggleSort('client')}>
               <span>Заказчик</span>
-
+              {sortBy === 'client' && (sortDirection === 'asc' ? ' ↑' : ' ↓')}
               <div className="resize-handle" onMouseDown={(e) => handleResizeStart(2, e)} />
             </div>
-            <div className="col col-product">
+            <div className="col col-product" onClick={() => toggleSort('product')}>
               <span>Вид продукции</span>
-
+              {sortBy === 'product' && (sortDirection === 'asc' ? ' ↑' : ' ↓')}
               <div className="resize-handle" onMouseDown={(e) => handleResizeStart(3, e)} />
             </div>
-            <div className="col col-qty">
+            <div className="col col-qty" onClick={() => toggleSort('quantity')}>
               <span>Тираж</span>
+              {sortBy === 'quantity' && (sortDirection === 'asc' ? ' ↑' : ' ↓')}
               <div className="resize-handle" onMouseDown={(e) => handleResizeStart(4, e)} />
             </div>
-            <div className="col col-folder">
+            <div className="col col-folder" onClick={() => toggleSort('folder')}>
               <span>Папка</span>
+              {sortBy === 'folder' && (sortDirection === 'asc' ? ' ↑' : ' ↓')}
               <div className="resize-handle" onMouseDown={(e) => handleResizeStart(5, e)} />
             </div>
-            <div className="col col-paper">
+            <div className="col col-paper" onClick={() => toggleSort('paper')}>
               <span>Материал / Ламинация</span>
-
+              {sortBy === 'paper' && (sortDirection === 'asc' ? ' ↑' : ' ↓')}
               <div className="resize-handle" onMouseDown={(e) => handleResizeStart(6, e)} />
             </div>
-            <div className="col col-tags">
+            <div className="col col-tags" onClick={() => toggleSort('operations')}>
               <span>Работы / Операции</span>
-
+              {sortBy === 'operations' && (sortDirection === 'asc' ? ' ↑' : ' ↓')}
               <div className="resize-handle" onMouseDown={(e) => handleResizeStart(7, e)} />
             </div>
-            <div className="col col-status">
+            <div className="col col-status" onClick={() => toggleSort('printer')}>
               <span>Печатник / Статус</span>
-
+              {sortBy === 'printer' && (sortDirection === 'asc' ? ' ↑' : ' ↓')}
               <div className="resize-handle" onMouseDown={(e) => handleResizeStart(8, e)} />
             </div>
             <div className="col col-actions">
