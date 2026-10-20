@@ -17,6 +17,7 @@ google-key.json
 *.log
 *.bak
 *.bak-*
+_backups/
 
 # Архивы исходников
 kabalprint.zip

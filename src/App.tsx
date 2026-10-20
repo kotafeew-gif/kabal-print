@@ -29,22 +29,20 @@ import { parseTz, type ParsedTz } from './parseTz';
 
 export type { ParsedTz };
 
-export interface Order {
-  rowNumber: number;
-  orderNumber: string;
-  client: string;
-  created: string;
-  deadline: string;
-  tz: string;
-  paperQuantity: string;
-  paperType: string;
-  colorMode: string;
-  note: string;
-  printer: string;
-  manager: string;
-  completed: boolean;
-  sheetId?: number;
-}
+import {
+  PRINTERS_CONFIG,
+  ORDER_STATUSES,
+  STATUS_BY_ID,
+  STATUS_SORT_INDEX,
+  hexToRgba,
+  parseDeadlineMs,
+  getDeadlineState,
+  type Order,
+} from './orderConfig';
+import KanbanBoard from './KanbanBoard';
+
+export type { Order } from './orderConfig';
+export { PRINTERS_CONFIG, ORDER_STATUSES, STATUS_BY_ID, hexToRgba } from './orderConfig';
 
 declare global {
   interface Window {
@@ -52,6 +50,7 @@ declare global {
       loadOrders: () => Promise<{ success: boolean; orders?: Order[]; error?: string }>;
       claimOrder: (data: { rowNumber: number; printer: string }) => Promise<{ success: boolean; error?: string; warning?: string }>;
       unclaimOrder?: (data: { rowNumber: number }) => Promise<{ success: boolean; error?: string; warning?: string }>;
+      setOrderStatus?: (data: { rowNumber: number; orderNumber: string; status: string }) => Promise<{ success: boolean; error?: string }>;
       completeOrder: (data: {
         rowNumber: number;
         paperQty?: string;
@@ -98,30 +97,8 @@ function isRemoteResource(value: string): boolean {
 }
 
 function parseDateTimeValue(value: string): number {
-  const match = String(value || '').match(/(\d{2})\.(\d{2})\.(\d{4})(?:[ \t]+(\d{1,2}):(\d{2}))?/);
-  if (!match) return Number.NaN;
-  return new Date(
-    Number(match[3]),
-    Number(match[2]) - 1,
-    Number(match[1]),
-    Number(match[4] || 0),
-    Number(match[5] || 0),
-  ).getTime();
-}
-
-export const PRINTERS_CONFIG: Record<string, { label: string; color: string; badgeClass: string }> = {
-  в: { label: 'Валера', color: '#c27ba0', badgeClass: 'badge-valera' },
-  к: { label: 'Андрей', color: '#00ffff', badgeClass: 'badge-andrey' },
-  m: { label: 'Коля', color: '#4a86e8', badgeClass: 'badge-kolya' },
-};
-
-/** #rrggbb → rgba(r, g, b, alpha) — для мягкой подкраски строк. */
-function hexToRgba(hex: string, alpha: number): string {
-  const h = hex.replace('#', '');
-  const r = parseInt(h.slice(0, 2), 16);
-  const g = parseInt(h.slice(2, 4), 16);
-  const b = parseInt(h.slice(4, 6), 16);
-  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  // Общий разбор дат: двузначный год и время через перевод строки (реальный формат ячеек)
+  return parseDeadlineMs(value);
 }
 
 const INITIAL_MOCK_ORDERS: Order[] = [
@@ -136,6 +113,7 @@ const INITIAL_MOCK_ORDERS: Order[] = [
     paperType: '130г/м² глянец',
     colorMode: '4+4',
     note: 'Срочно в утреннюю отгрузку клиенту',
+    status: 'Подряд',
     printer: '',
     manager: 'Елена',
     completed: false,
@@ -151,6 +129,7 @@ const INITIAL_MOCK_ORDERS: Order[] = [
     paperType: '250г/м² матовая',
     colorMode: '4+4',
     note: 'Клиент заберет самовывозом в 15:00',
+    status: 'Печать',
     printer: 'в',
     manager: 'Максим',
     completed: false,
@@ -166,6 +145,7 @@ const INITIAL_MOCK_ORDERS: Order[] = [
     paperType: '300г/м² Color Copy',
     colorMode: '4+0',
     note: 'Проверить метки реза перед тиражом',
+    status: 'Монтаж',
     printer: 'к',
     manager: 'Дмитрий',
     completed: false,
@@ -196,6 +176,7 @@ const INITIAL_MOCK_ORDERS: Order[] = [
     paperType: '300г/м² матовая',
     colorMode: '4+4',
     note: 'Персонализация по списку участников',
+    status: 'Согласование',
     printer: 'm',
     manager: 'Максим',
     completed: false,
@@ -226,6 +207,7 @@ const INITIAL_MOCK_ORDERS: Order[] = [
     paperType: '300г + офсет 80г',
     colorMode: '4+0 / 1+0',
     note: 'Пружину зажимать аккуратно, без замятия',
+    status: 'Пока стоп',
     printer: '',
     manager: 'Дмитрий',
     completed: false,
@@ -252,6 +234,17 @@ export default function App() {
   const [tagPanelOpen, setTagPanelOpen] = useState(false);
   const [tagSearch, setTagSearch] = useState('');
   const [expandedCats, setExpandedCats] = useState<Record<string, boolean>>({ operation: true });
+  // Активная вкладка: таблица заявок или Канбан-доска (запоминается между запусками)
+  const [view, setView] = useState<'table' | 'kanban'>(() => {
+    try {
+      return localStorage.getItem('kabal-view') === 'kanban' ? 'kanban' : 'table';
+    } catch {
+      return 'table';
+    }
+  });
+  // Пока карточку тащат по доске, автообновление приостановлено, иначе строка
+  // «убегает» из-под курсора при перерисовке
+  const draggingRef = React.useRef(false);
 
   // Форма завершения заявки (F/G/H/I)
   const [completeTarget, setCompleteTarget] = useState<Order | null>(null);
@@ -305,7 +298,8 @@ export default function App() {
   const [appVersion, setAppVersion] = useState('');
   const [updateState, setUpdateState] = useState<UpdateState | null>(null);
 
-  const DEFAULT_COL_WIDTHS = [85, 175, 160, 145, 115, 78, 250, 180, 120, 125];
+  // Колонки: № · Срок · Заказчик · Продукция · Тираж · Папка · Материал · Работы · Печатник · Статус · Действие
+  const DEFAULT_COL_WIDTHS = [85, 170, 150, 140, 105, 74, 235, 165, 108, 132, 120];
   const [colWidths, setColWidths] = useState<number[]>(() => {
     try {
       const saved = localStorage.getItem('kabal-col-widths');
@@ -318,6 +312,8 @@ export default function App() {
   const [resizing, setResizing] = useState<{ index: number; startX: number; startWidth: number } | null>(null);
 
   const load = async () => {
+    // Не перерисовываем список, пока пользователь тащит карточку на доске
+    if (draggingRef.current) return;
     setIsRefreshing(true);
     try {
       if (window.kabalAPI) {
@@ -419,6 +415,32 @@ export default function App() {
         return;
       }
       localMockOrders = localMockOrders.map((o) => (o.rowNumber === order.rowNumber ? { ...o, printer } : o));
+      setOrders([...localMockOrders]);
+    }
+  }
+
+  // Смена статуса производства («Подряд», «Монтаж», …)
+  async function handleSetStatus(order: Order, status: string, e?: React.SyntheticEvent) {
+    if (e) e.stopPropagation();
+    if ((order.status || '') === status) return;
+    setError('');
+    setNotice('');
+
+    // Сразу показываем выбранный статус, откат — если запись не удалась
+    setOrders((prev) => prev.map((o) => (o.rowNumber === order.rowNumber ? { ...o, status } : o)));
+
+    if (window.kabalAPI?.setOrderStatus) {
+      const result = await window.kabalAPI.setOrderStatus({
+        rowNumber: order.rowNumber,
+        orderNumber: order.orderNumber,
+        status,
+      });
+      if (!result.success) {
+        setError(result.error || 'Не удалось сохранить статус заявки');
+        await load();
+      }
+    } else {
+      localMockOrders = localMockOrders.map((o) => (o.rowNumber === order.rowNumber ? { ...o, status } : o));
       setOrders([...localMockOrders]);
     }
   }
@@ -765,6 +787,11 @@ export default function App() {
           cmp = countOperations(parsedA?.tags) - countOperations(parsedB?.tags);
         } else if (sortBy === 'printer') {
           cmp = (a.printer || '').localeCompare(b.printer || '', 'ru');
+        } else if (sortBy === 'status') {
+          // Порядок статусов как в выпадающем списке, без статуса — в конце
+          const statusA = STATUS_SORT_INDEX.get(a.status || '') ?? 99;
+          const statusB = STATUS_SORT_INDEX.get(b.status || '') ?? 99;
+          cmp = statusA - statusB;
         }
 
         return sortDirection === 'asc' ? cmp : -cmp;
@@ -813,19 +840,9 @@ export default function App() {
     return map;
   }, [orders, parsedOrdersMap]);
 
-  // Срок сдачи «сегодня» — выделяем, чтобы сразу было видно, что заявка сдаётся сегодня
-  const parseDeadlineDate = (deadline: string): Date | null => {
-    const m = deadline.match(/(\d{2})\.(\d{2})\.(\d{4})/);
-    if (!m) return null;
-    return new Date(+m[3], +m[2] - 1, +m[1]);
-  };
-
-  const isDeadlineToday = (deadline: string): boolean => {
-    const d = parseDeadlineDate(deadline);
-    if (!d) return false;
-    const now = new Date();
-    return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
-  };
+  // Срок сдачи «сегодня» — выделяем, чтобы сразу было видно, что заявка сдаётся сегодня.
+  // Разбор дат общий с Канбаном (двузначный год, время через перевод строки).
+  const isDeadlineToday = (deadline: string): boolean => getDeadlineState(deadline) === 'today';
 
   const getUrgencyBadge = (deadline: string) => {
     if (!deadline) return null;
@@ -1196,7 +1213,36 @@ export default function App() {
         </div>
       </div>
 
+      {/* Переключатель вкладок: таблица и Канбан-доска */}
+      <div className="view-tabs">
+        <button
+          className={`view-tab ${view === 'table' ? 'active' : ''}`}
+          onClick={() => {
+            setView('table');
+            try {
+              localStorage.setItem('kabal-view', 'table');
+            } catch {}
+          }}
+        >
+          Заявки
+          <span className="view-tab-count">{filteredOrders.length}</span>
+        </button>
+        <button
+          className={`view-tab ${view === 'kanban' ? 'active' : ''}`}
+          onClick={() => {
+            setView('kanban');
+            try {
+              localStorage.setItem('kabal-view', 'kanban');
+            } catch {}
+          }}
+        >
+          Канбан
+          <span className="view-tab-count">{filteredOrders.filter((o) => !o.completed).length}</span>
+        </button>
+      </div>
+
       {/* Main Table / Compact List */}
+      {view === 'table' && (
       <main className="orders-wrapper">
         <div className="compact-table-container">
           {/* Table Header with interactive sort clicks */}
@@ -1241,10 +1287,15 @@ export default function App() {
               {sortBy === 'operations' && (sortDirection === 'asc' ? ' ↑' : ' ↓')}
               <div className="resize-handle" onMouseDown={(e) => handleResizeStart(7, e)} />
             </div>
-            <div className="col col-status" onClick={() => toggleSort('printer')}>
-              <span>Печатник / Статус</span>
+            <div className="col col-printer" onClick={() => toggleSort('printer')}>
+              <span>Печатник</span>
               {sortBy === 'printer' && (sortDirection === 'asc' ? ' ↑' : ' ↓')}
               <div className="resize-handle" onMouseDown={(e) => handleResizeStart(8, e)} />
+            </div>
+            <div className="col col-status" onClick={() => toggleSort('status')}>
+              <span>Статус</span>
+              {sortBy === 'status' && (sortDirection === 'asc' ? ' ↑' : ' ↓')}
+              <div className="resize-handle" onMouseDown={(e) => handleResizeStart(9, e)} />
             </div>
             <div className="col col-actions">
               <span>Действие</span>
@@ -1279,6 +1330,11 @@ export default function App() {
                 const isExpanded = expandedId === `${order.rowNumber}-${order.orderNumber}`;
                 const isMyOrder = printer && order.printer === printer;
                 const printerConfig = PRINTERS_CONFIG[order.printer];
+                const statusConfig = order.status ? STATUS_BY_ID[order.status] : undefined;
+                // Подкраска статусом: первые две ячейки (№ и срок) + плавный переход
+                // в цвет печатника. Граница = отступ строки 14px + № + gap 8 + срок + gap 8.
+                const statusWashStop = 14 + (colWidths[0] || 0) + 8 + (colWidths[1] || 0) + 8;
+                const showStatusWash = Boolean(statusConfig) && !order.completed;
 
                 return (
                   <div
@@ -1300,6 +1356,15 @@ export default function App() {
                       style={gridStyle}
                       onClick={() => setExpandedId(isExpanded ? null : `${order.rowNumber}-${order.orderNumber}`)}
                     >
+                      {showStatusWash && statusConfig && (
+                        <div
+                          className="row-status-wash"
+                          aria-hidden="true"
+                          style={{
+                            background: `linear-gradient(90deg, ${hexToRgba(statusConfig.color, 0.5)} 0px, ${hexToRgba(statusConfig.color, 0.5)} ${statusWashStop}px, ${hexToRgba(statusConfig.color, 0)} ${statusWashStop + 250}px)`,
+                          }}
+                        />
+                      )}
                       {/* Order Number */}
                       <div className="col col-num">
                         <div className="order-num-tag">
@@ -1414,15 +1479,9 @@ export default function App() {
                         })()}
                       </div>
 
-                      {/* Status / Printer */}
-                      <div className="col col-status">
-                        {order.completed ? (
-                          <span className="status-badge badge-done">
-                            <CheckCircle2 size={13} />
-                            Готово
-                            {printerConfig?.label && <span className="status-printer-name">· {printerConfig.label}</span>}
-                          </span>
-                        ) : order.printer ? (
+                      {/* Печатник */}
+                      <div className="col col-printer">
+                        {order.printer ? (
                           <span className={`status-badge ${printerConfig?.badgeClass || 'badge-claimed'}`}>
                             <User size={13} />
                             {printerConfig?.label || order.printer}
@@ -1432,6 +1491,32 @@ export default function App() {
                             <span className="pulse-dot" />
                             Свободна
                           </span>
+                        )}
+                      </div>
+
+                      {/* Статус производства — выпадающий список в рамке статуса */}
+                      <div className="col col-status" onClick={(e) => e.stopPropagation()}>
+                        {order.completed ? (
+                          <span className="status-badge badge-done">
+                            <CheckCircle2 size={13} />
+                            Готово
+                          </span>
+                        ) : (
+                          <select
+                            className={`status-select ${statusConfig ? statusConfig.badgeClass : 'status-empty'}`}
+                            value={order.status || ''}
+                            title="Статус заявки"
+                            onMouseDown={(e) => e.stopPropagation()}
+                            onClick={(e) => e.stopPropagation()}
+                            onChange={(e) => handleSetStatus(order, e.target.value)}
+                          >
+                            <option value="">— статус —</option>
+                            {ORDER_STATUSES.map((item) => (
+                              <option key={item.id} value={item.id}>
+                                {item.label}
+                              </option>
+                            ))}
+                          </select>
                         )}
                       </div>
 
@@ -1506,6 +1591,16 @@ export default function App() {
                                     <span className={`printer-chip ${PRINTERS_CONFIG[order.printer].badgeClass || ''}`}>
                                       {PRINTERS_CONFIG[order.printer].label}
                                     </span>
+                                  ) : (
+                                    '—'
+                                  )}
+                                </span>
+                              </div>
+                              <div className="meta-row">
+                                <span className="meta-key">Статус:</span>
+                                <span className="meta-val">
+                                  {statusConfig ? (
+                                    <span className={`status-badge ${statusConfig.badgeClass}`}>{statusConfig.label}</span>
                                   ) : (
                                     '—'
                                   )}
@@ -1647,6 +1742,27 @@ export default function App() {
           )}
         </div>
       </main>
+      )}
+
+      {/* Канбан-доска: те же заявки, разложенные по статусам производства */}
+      {view === 'kanban' && (
+        <main className="orders-wrapper">
+          <KanbanBoard
+            orders={filteredOrders}
+            parsedOrdersMap={parsedOrdersMap}
+            currentPrinter={printer}
+            onStatusChange={handleSetStatus}
+            onClaim={handleClaim}
+            onUnclaim={handleUnclaim}
+            onComplete={handleComplete}
+            onOpenFolder={handleOpenFolder}
+            onPrint={handlePrintCard}
+            onDragStateChange={(dragging) => {
+              draggingRef.current = dragging;
+            }}
+          />
+        </main>
+      )}
 
       {/* Окно обновления: прогресс загрузки и автоперезапуск */}
       {updateState && ['available', 'downloading', 'downloaded', 'error'].includes(updateState.status) && (

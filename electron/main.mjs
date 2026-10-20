@@ -21,6 +21,14 @@ const PRINTERS = { в: { label: 'Валера', color: { red: 0.761, green: 0.48
 const PRINTER_NAME_TO_KEY = { 'Валера': 'в', 'Андрей': 'к', 'Коля': 'm' };
 const DONE_COLOR = { red: 1, green: 1, blue: 0 }; // #ffff00
 
+// Статусы производства («Подряд», «Монтаж», …) хранятся в отдельном служебном
+// листе. Основной лист Печать_2026 не трогаем: там своя структура, а столбец Z
+// занят брошью менеджерской программы. Ключ записи — номер строки + номер
+// заявки, поэтому при переиспользовании строки под новый заказ старый статус
+// не «прилипает».
+const STATUS_SHEET_TITLE = '__PRINT_STATUS__';
+const STATUS_HEADERS = ['Строка', 'Заявка', 'Статус'];
+
 function sheetsClient() {
   const auth = new google.auth.GoogleAuth({ keyFile: KEY_PATH, scopes: ['https://www.googleapis.com/auth/spreadsheets'] });
   return google.sheets({ version: 'v4', auth });
@@ -55,9 +63,10 @@ async function paintRow(sheets, sheetId, rowNumber, color) {
 
 async function getOrders() {
   const sheets = sheetsClient();
-  const [meta, values] = await Promise.all([
+  const [meta, values, statusMap] = await Promise.all([
     sheets.spreadsheets.get({ spreadsheetId: SPREADSHEET_ID, includeGridData: false }),
     sheets.spreadsheets.values.get({ spreadsheetId: SPREADSHEET_ID, range: `'${SHEET_TITLE}'!A:Y` }),
+    readStatusMap(sheets),
   ]);
   const sheet = meta.data.sheets?.find((item) => item.properties?.title === SHEET_TITLE);
   const grid = sheet?.properties?.sheetId;
@@ -72,9 +81,16 @@ async function getOrders() {
       const jLetter = String(row[9] || '').trim();
       if (PRINTERS[jLetter]) printerKey = jLetter;
     }
+    const orderNumber = String(row[0] || '').trim();
+    // Статус принимаем только если он записан для этой же заявки — иначе строка
+    // уже переиспользована под новый заказ и статус устарел
+    const statusEntry = statusMap.get(index + 1);
+    const status = statusEntry && (!statusEntry.orderNumber || statusEntry.orderNumber === orderNumber)
+      ? statusEntry.status
+      : '';
     return {
       rowNumber: index + 1,
-      orderNumber: String(row[0] || '').trim(),
+      orderNumber,
       client: String(row[1] || '').trim(),
       created: String(row[2] || '').trim(),
       deadline: String(row[3] || '').trim(),
@@ -86,9 +102,92 @@ async function getOrders() {
       printer: printerKey,
       manager: String(row[10] || '').trim(),
       completed: isCompleted,
+      status,
       sheetId: grid,
     };
   }).filter((order) => order.orderNumber && order.tz);
+}
+
+/** Лист со статусами может отсутствовать — тогда статусов ещё не выставляли. */
+async function ensureStatusSheet(sheets) {
+  const meta = await sheets.spreadsheets.get({ spreadsheetId: SPREADSHEET_ID, includeGridData: false });
+  if (meta.data.sheets?.some((item) => item.properties?.title === STATUS_SHEET_TITLE)) return;
+  await sheets.spreadsheets.batchUpdate({ spreadsheetId: SPREADSHEET_ID, requestBody: { requests: [
+    { addSheet: { properties: { title: STATUS_SHEET_TITLE, gridProperties: { rowCount: 1000, columnCount: 3 } } } },
+  ] } });
+  await sheets.spreadsheets.values.update({
+    spreadsheetId: SPREADSHEET_ID,
+    range: `'${STATUS_SHEET_TITLE}'!A1:C1`,
+    valueInputOption: 'RAW',
+    requestBody: { values: [STATUS_HEADERS] },
+  });
+}
+
+/** Map<номер строки, { orderNumber, status }> */
+async function readStatusMap(sheets) {
+  const map = new Map();
+  try {
+    const result = await sheets.spreadsheets.values.get({ spreadsheetId: SPREADSHEET_ID, range: `'${STATUS_SHEET_TITLE}'!A2:C` });
+    for (const row of result.data.values || []) {
+      const rowNumber = Number.parseInt(String(row[0] || '').trim(), 10);
+      const status = String(row[2] || '').trim();
+      if (!rowNumber || !status) continue;
+      map.set(rowNumber, { orderNumber: String(row[1] || '').trim(), status });
+    }
+  } catch {
+    // Листа ещё нет — статусов нет
+  }
+  return map;
+}
+
+async function setOrderStatus({ rowNumber, orderNumber, status }) {
+  const row = Number.parseInt(String(rowNumber || ''), 10);
+  if (!row || row < 2) throw new Error('Неверный номер строки');
+  const value = String(status || '').trim();
+  const order = String(orderNumber || '').trim();
+  const sheets = sheetsClient();
+  await ensureStatusSheet(sheets);
+
+  const existing = await sheets.spreadsheets.values.get({ spreadsheetId: SPREADSHEET_ID, range: `'${STATUS_SHEET_TITLE}'!A:C` });
+  const rows = existing.data.values || [];
+  const index = rows.findIndex((item, i) => i > 0 && Number.parseInt(String(item[0] || '').trim(), 10) === row);
+  const values = [[String(row), order, value]];
+
+  if (index === -1) {
+    await sheets.spreadsheets.values.append({
+      spreadsheetId: SPREADSHEET_ID,
+      range: `'${STATUS_SHEET_TITLE}'!A:C`,
+      valueInputOption: 'RAW',
+      insertDataOption: 'INSERT_ROWS',
+      requestBody: { values },
+    });
+  } else {
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: SPREADSHEET_ID,
+      range: `'${STATUS_SHEET_TITLE}'!A${index + 1}:C${index + 1}`,
+      valueInputOption: 'RAW',
+      requestBody: { values },
+    });
+  }
+  return { success: true };
+}
+
+/** Сбрасывает статус строки (при отказе от заявки статус уже неактуален). */
+async function clearOrderStatus(sheets, rowNumber) {
+  try {
+    const existing = await sheets.spreadsheets.values.get({ spreadsheetId: SPREADSHEET_ID, range: `'${STATUS_SHEET_TITLE}'!A:C` });
+    const rows = existing.data.values || [];
+    const index = rows.findIndex((item, i) => i > 0 && Number.parseInt(String(item[0] || '').trim(), 10) === rowNumber);
+    if (index === -1) return;
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: SPREADSHEET_ID,
+      range: `'${STATUS_SHEET_TITLE}'!A${index + 1}:C${index + 1}`,
+      valueInputOption: 'RAW',
+      requestBody: { values: [['', '', '']] },
+    });
+  } catch {
+    // листа нет — чистить нечего
+  }
 }
 
 async function claimOrder({ rowNumber, printer }) {
@@ -171,6 +270,8 @@ async function unclaimOrder({ rowNumber }) {
 
   // Clear row A-K background; protected columns are skipped
   await paintRow(sheets, sheetId, rowNumber, WHITE);
+  // Заявка вернулась в свободные — статус производства больше не актуален
+  await clearOrderStatus(sheets, rowNumber);
   return { success: true };
 }
 
@@ -277,6 +378,7 @@ ipcMain.handle('load-orders', async () => { try { return { success: true, orders
 ipcMain.handle('claim-order', async (_event, data) => { try { return await claimOrder(data); } catch (error) { return { success: false, error: error.message }; } });
 ipcMain.handle('unclaim-order', async (_event, data) => { try { return await unclaimOrder(data); } catch (error) { return { success: false, error: error.message }; } });
 ipcMain.handle('complete-order', async (_event, data) => { try { return await completeOrder(data); } catch (error) { return { success: false, error: error.message }; } });
+ipcMain.handle('set-order-status', async (_event, data) => { try { return await setOrderStatus(data || {}); } catch (error) { return { success: false, error: error.message }; } });
 ipcMain.handle('print-order-document', async (_event, data) => { try { return await printOrderDocument(data || {}); } catch (error) { return { success: false, error: error.message }; } });
 ipcMain.handle('open-folder', async (_event, folderPath) => {
   try {
