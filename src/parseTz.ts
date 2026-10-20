@@ -22,7 +22,7 @@ export interface ParsedTz {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** Путь к папке заказа: «\\Print\2022\...» или «D:\...». Всегда первая строка ТЗ. */
-const PATH_RE = /^([A-Za-z]:[\\/]|\\\\|\/\/)/;
+const PATH_RE = /^(?:[A-Za-z]:[\\/]|\\\\|\/\/|https?:\/\/)/i;
 
 export function extractFolderPath(text: string): string {
   const first = String(text || '').split(/\n/).map((l) => l.trim()).find(Boolean) || '';
@@ -130,6 +130,18 @@ export function parseTz(text: string, fallbackPaperQty?: string, fallbackPaperTy
     if (m && m.index !== undefined && m.index < bestIndex) {
       bestIndex = m.index;
       product = name;
+    }
+  }
+  // Для конвертов размер является частью вида продукции: «Конверты C5»,
+  // «Конверты C4», «Евро-конверты». Ищем его только в первых строках ТЗ,
+  // чтобы случайное упоминание формата в примечании не меняло название.
+  if (product === 'Конверты') {
+    const envelopeSize = head.match(/(?:конверт(?:ы|а)?[^\n]{0,24}?\b(C[0-6])\b|\b(C[0-6])\b[^\n]{0,24}?конверт(?:ы|а)?)/i);
+    const size = envelopeSize?.[1] || envelopeSize?.[2];
+    if (size) {
+      product = `Конверты ${size.toUpperCase()}`;
+    } else if (/(?:евро|euro)[- ]?конверт|конверт[^\n]{0,24}(?:евро|euro)/i.test(head)) {
+      product = 'Конверты евро';
     }
   }
   // Фолбэк — по всему тексту, если в первых строках ничего не нашли

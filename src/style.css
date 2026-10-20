@@ -998,6 +998,8 @@ body {
 .compact-table-body {
   display: flex;
   flex-direction: column;
+  /* Такой же белый зазор по бокам, как между карточками заявок. */
+  padding: 0 3px;
 }
 
 .order-row-group {
@@ -1595,6 +1597,12 @@ body {
 }
 
 /* TZ Right Side */
+.details-tz {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
 .tz-header {
   display: flex;
   justify-content: space-between;
@@ -1628,8 +1636,9 @@ body {
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
-  max-height: 260px;
-  overflow-y: auto;
+  flex: 1 1 auto;
+  max-height: none;
+  overflow-y: visible;
 }
 
 /* ================= EMPTY STATE ================= */

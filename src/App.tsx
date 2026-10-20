@@ -20,7 +20,8 @@ import {
   Calendar,
   Package,
   Tag,
-  FolderOpen
+  FolderOpen,
+  Globe2
 } from 'lucide-react';
 import './style.css';
 import { TAG_BY_ID, TAGS_BY_CATEGORY, CATEGORY_LABELS, CATEGORY_ORDER, PRODUCT_TYPES, type TagCategory } from './dictionaries';
@@ -90,6 +91,22 @@ function formatBytes(bytes?: number): string {
   const mb = bytes / (1024 * 1024);
   if (mb >= 1) return `${mb.toFixed(1).replace('.', ',')} МБ`;
   return `${Math.round(bytes / 1024)} КБ`;
+}
+
+function isRemoteResource(value: string): boolean {
+  return /^https?:\/\//i.test(value.trim());
+}
+
+function parseDateTimeValue(value: string): number {
+  const match = String(value || '').match(/(\d{2})\.(\d{2})\.(\d{4})(?:[ \t]+(\d{1,2}):(\d{2}))?/);
+  if (!match) return Number.NaN;
+  return new Date(
+    Number(match[3]),
+    Number(match[2]) - 1,
+    Number(match[1]),
+    Number(match[4] || 0),
+    Number(match[5] || 0),
+  ).getTime();
 }
 
 export const PRINTERS_CONFIG: Record<string, { label: string; color: string; badgeClass: string }> = {
@@ -223,7 +240,6 @@ export default function App() {
   const [printer, setPrinter] = useState('');
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [query, setQuery] = useState('');
-  const [sortBy, setSortBy] = useState<string>('number');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
   const [statusFilter, setStatusFilter] = useState<'all' | 'free' | 'my' | 'в' | 'к' | 'm'>('all');
   const [materialFilter, setMaterialFilter] = useState<string>('all');
@@ -720,34 +736,12 @@ export default function App() {
         return true;
       })
       .sort((a, b) => {
-        let cmp = 0;
-        const parsedA = parsedOrdersMap.get(a.rowNumber);
-        const parsedB = parsedOrdersMap.get(b.rowNumber);
-
-        if (sortBy === 'deadline') {
-          // Compare dates / strings
-          cmp = (a.deadline || '').localeCompare(b.deadline || '', 'ru');
-        } else if (sortBy === 'created') {
-          cmp = (a.created || '').localeCompare(b.created || '', 'ru');
-        } else if (sortBy === 'number') {
-          cmp = (a.orderNumber || '').localeCompare(b.orderNumber || '', 'ru', { numeric: true });
-        } else if (sortBy === 'client') {
-          cmp = (a.client || '').localeCompare(b.client || '', 'ru');
-        } else if (sortBy === 'product') {
-          cmp = (parsedA?.product || '').localeCompare(parsedB?.product || '', 'ru');
-        } else if (sortBy === 'paper') {
-          cmp = (parsedA?.paper || '').localeCompare(parsedB?.paper || '', 'ru');
-        } else if (sortBy === 'lamination') {
-          cmp = (parsedA?.lamination || '').localeCompare(parsedB?.lamination || '', 'ru');
-        } else if (sortBy === 'printer') {
-          cmp = (a.printer || '').localeCompare(b.printer || '', 'ru');
-        } else if (sortBy === 'operations') {
-          const countOps = (tags?: string[]) =>
-            (tags || []).filter((id) => TAG_BY_ID[id]?.category === 'operation').length;
-          cmp = countOps(parsedA?.tags) - countOps(parsedB?.tags);
-        } else if (sortBy === 'tags') {
-          cmp = (parsedA?.tags.length || 0) - (parsedB?.tags.length || 0);
-        }
+        const aDate = parseDateTimeValue(a.deadline);
+        const bDate = parseDateTimeValue(b.deadline);
+        // Единственная сортировка списка — по сроку сдачи.
+        const cmp = Number.isNaN(aDate) || Number.isNaN(bDate)
+          ? (a.deadline || '').localeCompare(b.deadline || '', 'ru')
+          : aDate - bDate;
 
         return sortDirection === 'asc' ? cmp : -cmp;
       });
@@ -762,18 +756,12 @@ export default function App() {
     laminationKind,
     selectedTags,
     query,
-    sortBy,
     sortDirection,
     parsedOrdersMap,
   ]);
 
-  const toggleSort = (field: string) => {
-    if (sortBy === field) {
-      setSortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'));
-    } else {
-      setSortBy(field);
-      setSortDirection('asc');
-    }
+  const toggleDeadlineSort = () => {
+    setSortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'));
   };
 
   const toggleTag = (id: string) => {
@@ -1183,24 +1171,23 @@ export default function App() {
         <div className="compact-table-container">
           {/* Table Header with interactive sort clicks */}
           <div className="compact-table-header" style={gridStyle}>
-            <div className="col col-num" onClick={() => toggleSort('number')}>
+            <div className="col col-num">
               <span>№ Заявки</span>
-              {sortBy === 'number' && (sortDirection === 'asc' ? ' ↑' : ' ↓')}
               <div className="resize-handle" onMouseDown={(e) => handleResizeStart(0, e)} />
             </div>
-            <div className="col col-dates" onClick={() => toggleSort('deadline')}>
-              <span>Сроки (Постановка → Сдача)</span>
-              {sortBy === 'deadline' && (sortDirection === 'asc' ? ' ↑' : ' ↓')}
+            <div className="col col-dates" onClick={toggleDeadlineSort}>
+              <span>Срок сдачи</span>
+              {sortDirection === 'asc' ? ' ↑' : ' ↓'}
               <div className="resize-handle" onMouseDown={(e) => handleResizeStart(1, e)} />
             </div>
-            <div className="col col-client" onClick={() => toggleSort('client')}>
+            <div className="col col-client">
               <span>Заказчик</span>
-              {sortBy === 'client' && (sortDirection === 'asc' ? ' ↑' : ' ↓')}
+
               <div className="resize-handle" onMouseDown={(e) => handleResizeStart(2, e)} />
             </div>
-            <div className="col col-product" onClick={() => toggleSort('product')}>
+            <div className="col col-product">
               <span>Вид продукции</span>
-              {sortBy === 'product' && (sortDirection === 'asc' ? ' ↑' : ' ↓')}
+
               <div className="resize-handle" onMouseDown={(e) => handleResizeStart(3, e)} />
             </div>
             <div className="col col-qty">
@@ -1211,19 +1198,19 @@ export default function App() {
               <span>Папка</span>
               <div className="resize-handle" onMouseDown={(e) => handleResizeStart(5, e)} />
             </div>
-            <div className="col col-paper" onClick={() => toggleSort('paper')}>
+            <div className="col col-paper">
               <span>Материал / Ламинация</span>
-              {sortBy === 'paper' && (sortDirection === 'asc' ? ' ↑' : ' ↓')}
+
               <div className="resize-handle" onMouseDown={(e) => handleResizeStart(6, e)} />
             </div>
-            <div className="col col-tags" onClick={() => toggleSort('operations')}>
+            <div className="col col-tags">
               <span>Работы / Операции</span>
-              {sortBy === 'operations' && (sortDirection === 'asc' ? ' ↑' : ' ↓')}
+
               <div className="resize-handle" onMouseDown={(e) => handleResizeStart(7, e)} />
             </div>
-            <div className="col col-status" onClick={() => toggleSort('printer')}>
+            <div className="col col-status">
               <span>Печатник / Статус</span>
-              {sortBy === 'printer' && (sortDirection === 'asc' ? ' ↑' : ' ↓')}
+
               <div className="resize-handle" onMouseDown={(e) => handleResizeStart(8, e)} />
             </div>
             <div className="col col-actions">
@@ -1298,10 +1285,6 @@ export default function App() {
                       {/* Dates */}
                       <div className="col col-dates">
                         <div className="dates-flow">
-                          <span className="date-created" title="Дата постановки">
-                            {order.created || '—'}
-                          </span>
-                          <span className="date-arrow">→</span>
                           <span className={`date-deadline ${isDeadlineToday(order.deadline) ? 'today' : ''}`} title="Срок сдачи">
                             {order.deadline || '—'}
                           </span>
@@ -1344,7 +1327,7 @@ export default function App() {
                             title={`Открыть папку: ${parsed.folderPath}`}
                             onClick={(e) => handleOpenFolder(parsed.folderPath, e)}
                           >
-                            <FolderOpen size={14} />
+                            {isRemoteResource(parsed.folderPath) ? <Globe2 size={14} /> : <FolderOpen size={14} />}
                             <span>Открыть</span>
                           </button>
                         ) : (
@@ -1496,7 +1479,7 @@ export default function App() {
                                 </span>
                               </div>
                               <div className="meta-row">
-                                <span className="meta-key">Дата создания:</span>
+                                <span className="meta-key">Дата постановки:</span>
                                 <span className="meta-val">{order.created || '—'}</span>
                               </div>
                               <div className="meta-row">
@@ -1532,7 +1515,7 @@ export default function App() {
                                       title={parsed.folderPath}
                                       onClick={(e) => handleOpenFolder(parsed.folderPath, e)}
                                     >
-                                      <FolderOpen size={12} />
+                                      {isRemoteResource(parsed.folderPath) ? <Globe2 size={12} /> : <FolderOpen size={12} />}
                                       {parsed.folderPath}
                                     </button>
                                   </span>

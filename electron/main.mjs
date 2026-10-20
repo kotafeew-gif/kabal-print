@@ -227,6 +227,9 @@ async function printWithShell(filePath) {
 async function printOrderDocument({ folderPath, orderNumber }) {
   const target = String(folderPath || '').trim();
   if (!target) return { success: false, error: 'В ТЗ заявки не указан путь к папке' };
+  if (/^https?:\/\//i.test(target)) {
+    return { success: false, error: 'Интернет-ссылка не содержит локального файла техкарты', noDocument: true };
+  }
 
   let entries;
   try {
@@ -279,6 +282,10 @@ ipcMain.handle('open-folder', async (_event, folderPath) => {
   try {
     const target = String(folderPath || '').trim();
     if (!target) return { success: false, error: 'Путь к папке не указан' };
+    if (/^https?:\/\//i.test(target)) {
+      await shell.openExternal(target);
+      return { success: true };
+    }
     const errorMessage = await shell.openPath(target);
     return errorMessage ? { success: false, error: errorMessage } : { success: true };
   } catch (error) {
