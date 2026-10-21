@@ -18,7 +18,7 @@ export interface Order {
   printer: string;
   manager: string;
   completed: boolean;
-  /** Статус производства: «Подряд», «Монтаж», «Согласование», «Печать», «Пока стоп», «Сборка» */
+  /** Статус производства: «Монтаж», «Печать», «Сборка», «Согласование», «Подряд», «Пока стоп» */
   status?: string;
   sheetId?: number;
 }
@@ -38,14 +38,16 @@ export interface OrderStatusConfig {
   badgeClass: string;
 }
 
-/** Статусы производства: порядок = порядок в выпадающем списке, на доске и при сортировке. */
+/** Статусы производства: порядок = порядок в выпадающем списке, на доске и при сортировке.
+ *  Последовательность производственная: монтаж → печать → сборка → согласование → подряд,
+ *  «Пока стоп» — последним, как исключение из потока. */
 export const ORDER_STATUSES: OrderStatusConfig[] = [
-  { id: 'Подряд', label: 'Подряд', color: '#f97316', badgeClass: 'status-podryad' },
   { id: 'Монтаж', label: 'Монтаж', color: '#22c55e', badgeClass: 'status-montazh' },
-  { id: 'Согласование', label: 'Согласование', color: '#eab308', badgeClass: 'status-soglasovanie' },
   { id: 'Печать', label: 'Печать', color: '#3b82f6', badgeClass: 'status-pechat' },
-  { id: 'Пока стоп', label: 'Пока стоп', color: '#ef4444', badgeClass: 'status-stop' },
   { id: 'Сборка', label: 'Сборка', color: '#8b5cf6', badgeClass: 'status-sborka' },
+  { id: 'Согласование', label: 'Согласование', color: '#eab308', badgeClass: 'status-soglasovanie' },
+  { id: 'Подряд', label: 'Подряд', color: '#f97316', badgeClass: 'status-podryad' },
+  { id: 'Пока стоп', label: 'Пока стоп', color: '#ef4444', badgeClass: 'status-stop' },
 ];
 
 export const STATUS_BY_ID: Record<string, OrderStatusConfig> = ORDER_STATUSES.reduce(

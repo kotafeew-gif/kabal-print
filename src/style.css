@@ -233,6 +233,10 @@ body {
   background: #3b82f6;
 }
 
+.violet-dot {
+  background: #7c3aed;
+}
+
 .free-pill.active {
   background: #f0fdf4;
   border-color: #22c55e;
@@ -248,6 +252,18 @@ body {
   background: #eff6ff;
   border-color: #3b82f6;
   color: #1d4ed8;
+}
+
+/* «Мои и свободные» — рабочий фильтр печатника */
+.myfree-pill.active {
+  background: #f5f3ff;
+  border-color: #7c3aed;
+  color: #5b21b6;
+}
+
+.myfree-pill.active .stat-label,
+.myfree-pill.active .stat-value {
+  color: #5b21b6;
 }
 
 .done-pill.active {
@@ -491,7 +507,7 @@ body {
 .compact-table-header,
 .compact-row {
   display: grid;
-  grid-template-columns: 85px 170px 150px 140px 105px 74px 235px 165px 108px 132px 120px;
+  grid-template-columns: 34px 85px 170px 150px 140px 105px 74px 235px 165px 108px 132px 120px;
   align-items: center;
   gap: 8px;
   width: 100%;
@@ -563,6 +579,97 @@ body {
 .resize-handle:active::after {
   background: #3b82f6;
   width: 4px;
+}
+
+/* Колонка выделения заявок: пакетное взятие в работу */
+.compact-table-header .col-select,
+.compact-row .col-select {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: default;
+  overflow: visible;
+}
+
+.row-select-box {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  cursor: pointer;
+  accent-color: #2563eb;
+  flex: 0 0 auto;
+}
+
+.row-select-box:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.row-select-empty {
+  display: block;
+  width: 16px;
+  height: 16px;
+}
+
+/* Выделенная (но ещё свободная) заявка */
+.order-row-group.selected {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 1px #93c5fd inset;
+}
+
+/* ================= ПАКЕТНОЕ ВЗЯТИЕ ================= */
+.bulk-actions-bar {
+  position: sticky;
+  top: 0;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 0 24px 10px;
+  padding: 8px 14px;
+  background: #eff6ff;
+  border: 1px solid #93c5fd;
+  border-radius: 10px;
+  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.12);
+  font-size: 13px;
+  color: #1e3a8a;
+}
+
+.bulk-count strong {
+  font-size: 14px;
+}
+
+.bulk-actions-bar .bulk-claim {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+}
+
+.bulk-link {
+  background: transparent;
+  border: 0;
+  padding: 4px 2px;
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #1d4ed8;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.bulk-link:hover {
+  color: #1e40af;
+}
+
+.bulk-link-muted {
+  color: #64748b;
+  margin-left: auto;
+}
+
+.bulk-link-muted:hover {
+  color: #334155;
 }
 
 /* ================= TAG FILTER ================= */
@@ -1702,6 +1809,29 @@ body {
 
 .btn-print-card:active {
   transform: scale(0.98);
+}
+
+/* Выделить все свободные заявки одного заказчика */
+.btn-select-client {
+  background: #eff6ff;
+  border: 1px solid #93c5fd;
+  color: #1d4ed8;
+  border-radius: 8px;
+  padding: 7px 12px;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  transition: all 0.12s ease;
+}
+
+.btn-select-client:hover {
+  background: #dbeafe;
+  border-color: #3b82f6;
 }
 
 /* TZ Right Side */

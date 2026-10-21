@@ -49,6 +49,16 @@ declare global {
     kabalAPI?: {
       loadOrders: () => Promise<{ success: boolean; orders?: Order[]; error?: string }>;
       claimOrder: (data: { rowNumber: number; printer: string }) => Promise<{ success: boolean; error?: string; warning?: string }>;
+      claimOrders?: (data: {
+        rowNumbers: number[];
+        printer: string;
+      }) => Promise<{
+        success: boolean;
+        error?: string;
+        warning?: string;
+        claimed?: number[];
+        failed?: Array<{ rowNumber: number; error: string }>;
+      }>;
       unclaimOrder?: (data: { rowNumber: number }) => Promise<{ success: boolean; error?: string; warning?: string }>;
       setOrderStatus?: (data: { rowNumber: number; orderNumber: string; status: string }) => Promise<{ success: boolean; error?: string }>;
       completeOrder: (data: {
@@ -224,7 +234,7 @@ export default function App() {
   const [query, setQuery] = useState('');
   const [sortBy, setSortBy] = useState<string>('deadline');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
-  const [statusFilter, setStatusFilter] = useState<'all' | 'free' | 'my' | 'в' | 'к' | 'm'>('all');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'free' | 'my' | 'my-free' | 'в' | 'к' | 'm'>('all');
   const [materialFilter, setMaterialFilter] = useState<string>('all');
   const [laminationFilter, setLaminationFilter] = useState<string>('all');
   const [laminationKind, setLaminationKind] = useState<string>('all');
@@ -245,6 +255,16 @@ export default function App() {
   // Пока карточку тащат по доске, автообновление приостановлено, иначе строка
   // «убегает» из-под курсора при перерисовке
   const draggingRef = React.useRef(false);
+
+  // Выделение нескольких заявок сразу: у одного заказчика часто несколько заявок,
+  // их надо взять в работу одним действием. Храним номера строк листа.
+  const [selectedRows, setSelectedRows] = useState<number[]>([]);
+  const [isBulkClaiming, setIsBulkClaiming] = useState(false);
+
+  // Перетаскивание границы колонки не должно заодно сортировать: браузер присылает
+  // click по заголовку сразу после mouseup. Гасим сортировку на 250 мс —
+  // тот же приём, что justDraggedRef на Канбан-доске.
+  const justResizedRef = React.useRef(false);
 
   // Форма завершения заявки (F/G/H/I)
   const [completeTarget, setCompleteTarget] = useState<Order | null>(null);
@@ -298,8 +318,8 @@ export default function App() {
   const [appVersion, setAppVersion] = useState('');
   const [updateState, setUpdateState] = useState<UpdateState | null>(null);
 
-  // Колонки: № · Срок · Заказчик · Продукция · Тираж · Папка · Материал · Работы · Печатник · Статус · Действие
-  const DEFAULT_COL_WIDTHS = [85, 170, 150, 140, 105, 74, 235, 165, 108, 132, 120];
+  // Колонки: [чекбокс] № · Срок · Заказчик · Продукция · Тираж · Папка · Материал · Работы · Печатник · Статус · Действие
+  const DEFAULT_COL_WIDTHS = [34, 85, 170, 150, 140, 105, 74, 235, 165, 108, 132, 120];
   const [colWidths, setColWidths] = useState<number[]>(() => {
     try {
       const saved = localStorage.getItem('kabal-col-widths');
@@ -342,6 +362,8 @@ export default function App() {
   const handleResizeStart = (index: number, e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
+    // Взводим защиту: click по заголовку после ресайза не должен менять сортировку
+    justResizedRef.current = true;
     setResizing({ index, startX: e.clientX, startWidth: colWidths[index] });
   };
 
@@ -362,6 +384,10 @@ export default function App() {
         return prev;
       });
       setResizing(null);
+      // click приходит сразу после mouseup — снимаем защиту чуть позже
+      window.setTimeout(() => {
+        justResizedRef.current = false;
+      }, 250);
     };
     window.addEventListener('mousemove', handleMouseMove);
     window.addEventListener('mouseup', handleMouseUp);
@@ -419,7 +445,80 @@ export default function App() {
     }
   }
 
-  // Смена статуса производства («Подряд», «Монтаж», …)
+  // ── Пакетное взятие: выделение нескольких заявок сразу ──────────────────────
+  const toggleRowSelection = (rowNumber: number) => {
+    setSelectedRows((prev) =>
+      prev.includes(rowNumber) ? prev.filter((r) => r !== rowNumber) : [...prev, rowNumber],
+    );
+  };
+
+  /** Выделить все свободные заявки одного заказчика (частый случай: несколько видов продукции) */
+  const selectClientOrders = (client: string) => {
+    const rows = orders
+      .filter((o) => !o.completed && !o.printer && o.client === client)
+      .map((o) => o.rowNumber);
+    if (!rows.length) return;
+    setSelectedRows((prev) => Array.from(new Set([...prev, ...rows])));
+  };
+
+  async function handleClaimMany(rows: number[]) {
+    if (!printer) {
+      setError('Сначала выберите себя (печатника) в верхнем меню');
+      return;
+    }
+    // Берём только свободные заявки из текущего списка: занятые и готовые пропускаем
+    const targets = orders.filter((o) => rows.includes(o.rowNumber) && !o.completed && !o.printer);
+    if (!targets.length) {
+      setError('Среди выбранных нет свободных заявок');
+      setSelectedRows([]);
+      return;
+    }
+
+    setError('');
+    setNotice('');
+    setIsBulkClaiming(true);
+    try {
+      if (window.kabalAPI?.claimOrders) {
+        const result = await window.kabalAPI.claimOrders({
+          rowNumbers: targets.map((o) => o.rowNumber),
+          printer,
+        });
+        if (!result.success) {
+          setError(result.error || 'Не удалось взять заявки');
+          return;
+        }
+        const failed = result.failed || [];
+        const claimedCount = result.claimed?.length || 0;
+        if (failed.length) {
+          const details = failed.map((f) => {
+            const order = orders.find((o) => o.rowNumber === f.rowNumber);
+            return `${order ? `№ ${order.orderNumber}` : `строка ${f.rowNumber}`} — ${f.error}`;
+          });
+          setError(`Взято: ${claimedCount}. Не удалось взять: ${details.join('; ')}`);
+        }
+        if (result.warning) {
+          setNotice(result.warning);
+        } else if (!failed.length) {
+          setNotice(`Взято в работу: ${claimedCount} (${PRINTERS_CONFIG[printer]?.label || printer})`);
+        }
+        setSelectedRows([]);
+        await load();
+      } else {
+        localMockOrders = localMockOrders.map((o) =>
+          targets.some((t) => t.rowNumber === o.rowNumber) ? { ...o, printer } : o,
+        );
+        setOrders([...localMockOrders]);
+        setSelectedRows([]);
+        setNotice(`Взято в работу: ${targets.length} (${PRINTERS_CONFIG[printer]?.label || printer})`);
+      }
+    } catch (err: any) {
+      setError(err?.message || 'Не удалось взять заявки');
+    } finally {
+      setIsBulkClaiming(false);
+    }
+  }
+
+  // Смена статуса производства («Монтаж», «Печать», …)
   async function handleSetStatus(order: Order, status: string, e?: React.SyntheticEvent) {
     if (e) e.stopPropagation();
     if ((order.status || '') === status) return;
@@ -675,11 +774,14 @@ export default function App() {
     const active = orders.filter((o) => !o.completed);
     const free = active.filter((o) => !o.printer).length;
     const myOrders = printer ? active.filter((o) => o.printer === printer).length : 0;
+    // «Мои и свободные» — рабочий экран печатника: свои заявки + то, что можно взять
+    const myAndFree = printer ? active.filter((o) => !o.printer || o.printer === printer).length : free;
     const completed = orders.filter((o) => o.completed).length;
     return {
       totalActive: active.length,
       free,
       myOrders,
+      myAndFree,
       completed,
     };
   }, [orders, printer]);
@@ -700,6 +802,11 @@ export default function App() {
         if (statusFilter === 'free' && order.printer) return false;
         if (statusFilter === 'my') {
           if (!printer || order.printer !== printer) return false;
+        }
+        // «Мои и свободные»: заявки выбранного печатника плюс ещё не взятые
+        if (statusFilter === 'my-free') {
+          if (!printer) return false;
+          if (order.printer && order.printer !== printer) return false;
         }
         if (statusFilter === 'в' && order.printer !== 'в') return false;
         if (statusFilter === 'к' && order.printer !== 'к') return false;
@@ -812,7 +919,36 @@ export default function App() {
     parsedOrdersMap,
   ]);
 
+  // Свободные заявки текущего списка — только их можно выделить и взять пакетом
+  const selectableFreeRows = useMemo(
+    () => filteredOrders.filter((o) => !o.completed && !o.printer).map((o) => o.rowNumber),
+    [filteredOrders],
+  );
+
+  const selectedFreeRows = useMemo(
+    () => selectedRows.filter((row) => selectableFreeRows.includes(row)),
+    [selectedRows, selectableFreeRows],
+  );
+
+  const allFreeSelected = selectableFreeRows.length > 0 && selectedFreeRows.length === selectableFreeRows.length;
+
+  const toggleSelectAllFree = () => {
+    setSelectedRows(allFreeSelected ? [] : selectableFreeRows);
+  };
+
+  // После обновления таблицы выделение чистим от заявок, которые уже взяли или завершили
+  useEffect(() => {
+    setSelectedRows((prev) => {
+      const next = prev.filter((rowNumber) =>
+        orders.some((o) => o.rowNumber === rowNumber && !o.completed && !o.printer),
+      );
+      return next.length === prev.length ? prev : next;
+    });
+  }, [orders]);
+
   const toggleSort = (field: string) => {
+    // Ресайз границы колонки не должен заодно менять сортировку
+    if (justResizedRef.current) return;
     if (sortBy === field) {
       setSortDirection((prev) => (prev === 'asc' ? 'desc' : 'asc'));
     } else {
@@ -942,6 +1078,18 @@ export default function App() {
 
         {printer && (
           <div
+            className={`stat-pill myfree-pill ${statusFilter === 'my-free' ? 'active' : ''}`}
+            onClick={() => setStatusFilter('my-free')}
+            title="Мои заявки плюс ещё свободные — рабочий список печатника"
+          >
+            <span className="stat-indicator violet-dot" />
+            <span className="stat-label">Мои и свободные ({PRINTERS_CONFIG[printer]?.label}):</span>
+            <span className="stat-value">{stats.myAndFree}</span>
+          </div>
+        )}
+
+        {printer && (
+          <div
             className={`stat-pill my-pill ${statusFilter === 'my' ? 'active' : ''}`}
             onClick={() => setStatusFilter('my')}
           >
@@ -1030,6 +1178,7 @@ export default function App() {
               <option value="all">Все статусы</option>
               <option value="free">🟢 Только свободные (не в работе)</option>
               {printer && <option value="my">👤 Только мои ({PRINTERS_CONFIG[printer]?.label})</option>}
+              {printer && <option value="my-free">👤 Мои и свободные ({PRINTERS_CONFIG[printer]?.label})</option>}
               <option value="в">Валера (в)</option>
               <option value="к">Андрей (к)</option>
               <option value="m">Коля (m)</option>
@@ -1241,61 +1390,100 @@ export default function App() {
         </button>
       </div>
 
+      {/* Пакетное взятие: появляется, когда выделены свободные заявки */}
+      {view === 'table' && selectedFreeRows.length > 0 && (
+        <div className="bulk-actions-bar">
+          <span className="bulk-count">
+            Выбрано заявок: <strong>{selectedFreeRows.length}</strong>
+          </span>
+          <button
+            className="btn-claim-large bulk-claim"
+            onClick={() => handleClaimMany(selectedFreeRows)}
+            disabled={!printer || isBulkClaiming}
+            title={printer ? `Взять все выбранные заявки на ${PRINTERS_CONFIG[printer]?.label}` : 'Выберите себя в меню «Печатник»'}
+          >
+            <User size={15} />
+            {isBulkClaiming
+              ? 'Берём…'
+              : `Взять в работу${printer ? ` (${PRINTERS_CONFIG[printer]?.label})` : ''}`}
+          </button>
+          <button className="bulk-link" onClick={toggleSelectAllFree}>
+            {allFreeSelected ? 'Снять выделение' : 'Выделить все свободные'}
+          </button>
+          <button className="bulk-link bulk-link-muted" onClick={() => setSelectedRows([])}>
+            Сбросить
+          </button>
+        </div>
+      )}
+
       {/* Main Table / Compact List */}
       {view === 'table' && (
       <main className="orders-wrapper">
         <div className="compact-table-container">
           {/* Table Header with interactive sort clicks */}
           <div className="compact-table-header" style={gridStyle}>
+            <div className="col col-select" onClick={(e) => e.stopPropagation()}>
+              <input
+                type="checkbox"
+                className="row-select-box"
+                checked={allFreeSelected}
+                disabled={selectableFreeRows.length === 0}
+                onChange={toggleSelectAllFree}
+                title="Выделить все свободные заявки"
+                ref={(el) => {
+                  if (el) el.indeterminate = selectedFreeRows.length > 0 && !allFreeSelected;
+                }}
+              />
+            </div>
             <div className="col col-num" onClick={() => toggleSort('number')}>
               <span>№ Заявки</span>
               {sortBy === 'number' && (sortDirection === 'asc' ? ' ↑' : ' ↓')}
-              <div className="resize-handle" onMouseDown={(e) => handleResizeStart(0, e)} />
+              <div className="resize-handle" onMouseDown={(e) => handleResizeStart(1, e)} />
             </div>
             <div className="col col-dates" onClick={() => toggleSort('deadline')}>
               <span>Срок сдачи</span>
               {sortBy === 'deadline' && (sortDirection === 'asc' ? ' ↑' : ' ↓')}
-              <div className="resize-handle" onMouseDown={(e) => handleResizeStart(1, e)} />
+              <div className="resize-handle" onMouseDown={(e) => handleResizeStart(2, e)} />
             </div>
             <div className="col col-client" onClick={() => toggleSort('client')}>
               <span>Заказчик</span>
               {sortBy === 'client' && (sortDirection === 'asc' ? ' ↑' : ' ↓')}
-              <div className="resize-handle" onMouseDown={(e) => handleResizeStart(2, e)} />
+              <div className="resize-handle" onMouseDown={(e) => handleResizeStart(3, e)} />
             </div>
             <div className="col col-product" onClick={() => toggleSort('product')}>
               <span>Вид продукции</span>
               {sortBy === 'product' && (sortDirection === 'asc' ? ' ↑' : ' ↓')}
-              <div className="resize-handle" onMouseDown={(e) => handleResizeStart(3, e)} />
+              <div className="resize-handle" onMouseDown={(e) => handleResizeStart(4, e)} />
             </div>
             <div className="col col-qty" onClick={() => toggleSort('quantity')}>
               <span>Тираж</span>
               {sortBy === 'quantity' && (sortDirection === 'asc' ? ' ↑' : ' ↓')}
-              <div className="resize-handle" onMouseDown={(e) => handleResizeStart(4, e)} />
+              <div className="resize-handle" onMouseDown={(e) => handleResizeStart(5, e)} />
             </div>
             <div className="col col-folder" onClick={() => toggleSort('folder')}>
               <span>Папка</span>
               {sortBy === 'folder' && (sortDirection === 'asc' ? ' ↑' : ' ↓')}
-              <div className="resize-handle" onMouseDown={(e) => handleResizeStart(5, e)} />
+              <div className="resize-handle" onMouseDown={(e) => handleResizeStart(6, e)} />
             </div>
             <div className="col col-paper" onClick={() => toggleSort('paper')}>
               <span>Материал / Ламинация</span>
               {sortBy === 'paper' && (sortDirection === 'asc' ? ' ↑' : ' ↓')}
-              <div className="resize-handle" onMouseDown={(e) => handleResizeStart(6, e)} />
+              <div className="resize-handle" onMouseDown={(e) => handleResizeStart(7, e)} />
             </div>
             <div className="col col-tags" onClick={() => toggleSort('operations')}>
               <span>Работы / Операции</span>
               {sortBy === 'operations' && (sortDirection === 'asc' ? ' ↑' : ' ↓')}
-              <div className="resize-handle" onMouseDown={(e) => handleResizeStart(7, e)} />
+              <div className="resize-handle" onMouseDown={(e) => handleResizeStart(8, e)} />
             </div>
             <div className="col col-printer" onClick={() => toggleSort('printer')}>
               <span>Печатник</span>
               {sortBy === 'printer' && (sortDirection === 'asc' ? ' ↑' : ' ↓')}
-              <div className="resize-handle" onMouseDown={(e) => handleResizeStart(8, e)} />
+              <div className="resize-handle" onMouseDown={(e) => handleResizeStart(9, e)} />
             </div>
             <div className="col col-status" onClick={() => toggleSort('status')}>
               <span>Статус</span>
               {sortBy === 'status' && (sortDirection === 'asc' ? ' ↑' : ' ↓')}
-              <div className="resize-handle" onMouseDown={(e) => handleResizeStart(9, e)} />
+              <div className="resize-handle" onMouseDown={(e) => handleResizeStart(10, e)} />
             </div>
             <div className="col col-actions">
               <span>Действие</span>
@@ -1332,14 +1520,16 @@ export default function App() {
                 const printerConfig = PRINTERS_CONFIG[order.printer];
                 const statusConfig = order.status ? STATUS_BY_ID[order.status] : undefined;
                 // Подкраска статусом: первые две ячейки (№ и срок) + плавный переход
-                // в цвет печатника. Граница = отступ строки 14px + № + gap 8 + срок + gap 8.
-                const statusWashStop = 14 + (colWidths[0] || 0) + 8 + (colWidths[1] || 0) + 8;
+                // в цвет печатника. Граница = отступ строки 14px + чекбокс + № + срок
+                // и три зазора по 8px (колонка выделения теперь первая).
+                const statusWashStop =
+                  14 + (colWidths[0] || 0) + 8 + (colWidths[1] || 0) + 8 + (colWidths[2] || 0) + 8;
                 const showStatusWash = Boolean(statusConfig) && !order.completed;
 
                 return (
                   <div
                     key={`${order.rowNumber}-${order.orderNumber}`}
-                    className={`order-row-group ${isExpanded ? 'expanded' : ''} ${order.completed ? 'completed' : ''} ${order.printer ? 'claimed' : 'free'}`}
+                    className={`order-row-group ${isExpanded ? 'expanded' : ''} ${order.completed ? 'completed' : ''} ${order.printer ? 'claimed' : 'free'} ${selectedRows.includes(order.rowNumber) ? 'selected' : ''}`}
                     style={
                       order.printer && printerConfig && !order.completed
                         ? ({
@@ -1365,6 +1555,21 @@ export default function App() {
                           }}
                         />
                       )}
+                      {/* Выделение для пакетного взятия — только свободные заявки */}
+                      <div className="col col-select" onClick={(e) => e.stopPropagation()}>
+                        {!order.completed && !order.printer ? (
+                          <input
+                            type="checkbox"
+                            className="row-select-box"
+                            checked={selectedRows.includes(order.rowNumber)}
+                            onChange={() => toggleRowSelection(order.rowNumber)}
+                            title="Выбрать заявку для пакетного взятия в работу"
+                          />
+                        ) : (
+                          <span className="row-select-empty" />
+                        )}
+                      </div>
+
                       {/* Order Number */}
                       <div className="col col-num">
                         <div className="order-num-tag">
@@ -1707,6 +1912,25 @@ export default function App() {
                                   В работе: {printerConfig?.label || order.printer}
                                 </span>
                               )}
+                              {/* У заказчика часто несколько заявок — выделяем их одним нажатием */}
+                              {(() => {
+                                const clientFree = orders.filter(
+                                  (o) => !o.completed && !o.printer && o.client === order.client,
+                                ).length;
+                                if (clientFree < 2) return null;
+                                return (
+                                  <button
+                                    className="btn-select-client"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      selectClientOrders(order.client);
+                                    }}
+                                    title={`Выделить все свободные заявки заказчика «${order.client}»`}
+                                  >
+                                    <Users size={15} /> Все заявки заказчика ({clientFree})
+                                  </button>
+                                );
+                              })()}
                               <button
                                 className="btn-print-card"
                                 onClick={(e) => handlePrintCard(order, e)}

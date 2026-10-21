@@ -190,17 +190,17 @@ async function clearOrderStatus(sheets, rowNumber) {
   }
 }
 
-async function claimOrder({ rowNumber, printer }) {
-  const config = PRINTERS[printer];
-  if (!config) throw new Error('Неизвестный печатник');
-  const sheets = sheetsClient();
+/**
+ * Взятие одной строки: буква печатника в J, имя в Y, заливка A..Z цветом печатника.
+ * Возвращает { ok, error?, skipped } — вызывается и одиночным, и пакетным взятием,
+ * чтобы правила проверки владельца были ровно одни.
+ */
+async function claimRow(sheets, sheetId, rowNumber, printer, config) {
   const current = await sheets.spreadsheets.values.get({ spreadsheetId: SPREADSHEET_ID, range: `'${SHEET_TITLE}'!Y${rowNumber}` });
   const ownerName = String(current.data.values?.[0]?.[0] || '').trim();
+  if (ownerName === 'Готово') return { ok: false, error: 'Заявка уже завершена', skipped: [] };
   const ownerKey = PRINTER_NAME_TO_KEY[ownerName] || '';
-  if (ownerKey && ownerKey !== printer) return { success: false, error: `Заявка уже взята: ${ownerName}` };
-  const meta = await sheets.spreadsheets.get({ spreadsheetId: SPREADSHEET_ID, includeGridData: false });
-  const sheet = meta.data.sheets?.find((item) => item.properties?.title === SHEET_TITLE);
-  const sheetId = sheet?.properties?.sheetId;
+  if (ownerKey && ownerKey !== printer) return { ok: false, error: `Заявка уже взята: ${ownerName}`, skipped: [] };
 
   // Critical: write printer letter to J and name to Y
   await sheets.spreadsheets.batchUpdate({ spreadsheetId: SPREADSHEET_ID, requestBody: { requests: [
@@ -210,10 +210,65 @@ async function claimOrder({ rowNumber, printer }) {
 
   // Paint row A-Z with printer color; protected columns are skipped and reported
   const skipped = await paintRow(sheets, sheetId, rowNumber, config.color);
-  const warning = skipped.length
-    ? `Заявка взята. Не удалось покрасить защищённые столбцы: ${skipped.join(', ')}`
+  return { ok: true, skipped };
+}
+
+async function claimOrder({ rowNumber, printer }) {
+  const config = PRINTERS[printer];
+  if (!config) throw new Error('Неизвестный печатник');
+  const sheets = sheetsClient();
+  const meta = await sheets.spreadsheets.get({ spreadsheetId: SPREADSHEET_ID, includeGridData: false });
+  const sheet = meta.data.sheets?.find((item) => item.properties?.title === SHEET_TITLE);
+  const sheetId = sheet?.properties?.sheetId;
+  if (!sheetId && sheetId !== 0) throw new Error('Лист Печать_2026 не найден');
+
+  const result = await claimRow(sheets, sheetId, rowNumber, printer, config);
+  if (!result.ok) return { success: false, error: result.error };
+  const warning = result.skipped.length
+    ? `Заявка взята. Не удалось покрасить защищённые столбцы: ${result.skipped.join(', ')}`
     : '';
   return { success: true, warning };
+}
+
+/**
+ * Пакетное взятие: у заказчика часто несколько заявок сразу. Мета листа и клиент
+ * Sheets берутся один раз, строки обрабатываются по очереди; занятые/завершённые
+ * не роняют весь пакет — они возвращаются в failed.
+ */
+async function claimOrders({ rowNumbers, printer }) {
+  const config = PRINTERS[printer];
+  if (!config) throw new Error('Неизвестный печатник');
+  const rows = (Array.isArray(rowNumbers) ? rowNumbers : [])
+    .map((value) => Number.parseInt(String(value ?? ''), 10))
+    .filter((value) => Number.isFinite(value) && value >= 2);
+  if (!rows.length) return { success: false, error: 'Не выбрано ни одной заявки' };
+
+  const sheets = sheetsClient();
+  const meta = await sheets.spreadsheets.get({ spreadsheetId: SPREADSHEET_ID, includeGridData: false });
+  const sheetId = meta.data.sheets?.find((item) => item.properties?.title === SHEET_TITLE)?.properties?.sheetId;
+  if (!sheetId && sheetId !== 0) throw new Error('Лист Печать_2026 не найден');
+
+  const claimed = [];
+  const failed = [];
+  const skippedCols = [];
+  for (const rowNumber of rows) {
+    try {
+      const result = await claimRow(sheets, sheetId, rowNumber, printer, config);
+      if (!result.ok) {
+        failed.push({ rowNumber, error: result.error });
+        continue;
+      }
+      claimed.push(rowNumber);
+      if (result.skipped.length) skippedCols.push(`${rowNumber}: ${result.skipped.join(', ')}`);
+    } catch (error) {
+      failed.push({ rowNumber, error: error.message });
+    }
+  }
+
+  const warning = skippedCols.length
+    ? `Не удалось покрасить защищённые столбцы (строка — столбцы): ${skippedCols.join('; ')}`
+    : '';
+  return { success: true, claimed, failed, warning };
 }
 
 async function completeOrder({ rowNumber, paperQty, paperDensity, colorMode, postpress }) {
@@ -376,6 +431,7 @@ async function printOrderDocument({ folderPath, orderNumber }) {
 
 ipcMain.handle('load-orders', async () => { try { return { success: true, orders: await getOrders() }; } catch (error) { return { success: false, error: error.message }; } });
 ipcMain.handle('claim-order', async (_event, data) => { try { return await claimOrder(data); } catch (error) { return { success: false, error: error.message }; } });
+ipcMain.handle('claim-orders', async (_event, data) => { try { return await claimOrders(data || {}); } catch (error) { return { success: false, error: error.message }; } });
 ipcMain.handle('unclaim-order', async (_event, data) => { try { return await unclaimOrder(data); } catch (error) { return { success: false, error: error.message }; } });
 ipcMain.handle('complete-order', async (_event, data) => { try { return await completeOrder(data); } catch (error) { return { success: false, error: error.message }; } });
 ipcMain.handle('set-order-status', async (_event, data) => { try { return await setOrderStatus(data || {}); } catch (error) { return { success: false, error: error.message }; } });

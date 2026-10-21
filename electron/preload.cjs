@@ -3,6 +3,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('kabalAPI', {
   loadOrders: () => ipcRenderer.invoke('load-orders'),
   claimOrder: (data) => ipcRenderer.invoke('claim-order', data),
+  claimOrders: (data) => ipcRenderer.invoke('claim-orders', data),
   unclaimOrder: (data) => ipcRenderer.invoke('unclaim-order', data),
   completeOrder: (data) => ipcRenderer.invoke('complete-order', data),
   setOrderStatus: (data) => ipcRenderer.invoke('set-order-status', data),
