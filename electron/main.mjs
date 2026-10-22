@@ -311,6 +311,47 @@ async function completeOrder({ rowNumber, paperQty, paperDensity, colorMode, pos
   return { success: true, warning };
 }
 
+// Запись использованной бумаги (F = кол-во листов, G = плотность/тип) без
+// завершения заявки. Печатник фиксирует расход бумаги прямо из карточки, не
+// дожидаясь окна завершения. Статус (Y), печатник (J) и заливка строки НЕ меняются.
+// Несколько видов бумаги — несколько строк, склеенных переводом строки, как в
+// completeOrder: массивы qty/density идут параллельно по строкам.
+async function savePaperQty({ rowNumber, paperQty, paperDensity }) {
+  // Валидация ДО sheetsClient() — чтобы проба падала до обращения к Sheets
+  const row = Number(rowNumber);
+  if (!Number.isInteger(row) || row < 2) throw new Error('Некорректный номер строки');
+  const qty = String(paperQty ?? '');
+  const density = String(paperDensity ?? '');
+  if (!qty.trim() && !density.trim()) throw new Error('Укажите количество бумаги');
+
+  const sheets = sheetsClient();
+  const meta = await sheets.spreadsheets.get({ spreadsheetId: SPREADSHEET_ID, includeGridData: false });
+  const sheetId = meta.data.sheets?.find((item) => item.properties?.title === SHEET_TITLE)?.properties?.sheetId;
+  if (!sheetId) throw new Error('Лист Печать_2026 не найден');
+
+  // F = 5 «Кол-во листов бумаги», G = 6 «Плотность / тип бумаги».
+  // Обе ячейки перезаписываются тем, что в редакторе карточки: пустая строка —
+  // это намеренная очистка значения печатником, а не «нет данных» (как при завершении).
+  const cells = [
+    { col: 5, value: qty },
+    { col: 6, value: density },
+  ];
+
+  await sheets.spreadsheets.batchUpdate({
+    spreadsheetId: SPREADSHEET_ID,
+    requestBody: {
+      requests: cells.map((c) => ({
+        updateCells: {
+          start: { sheetId, rowIndex: row - 1, columnIndex: c.col },
+          rows: [{ values: [{ userEnteredValue: { stringValue: c.value } }] }],
+          fields: 'userEnteredValue',
+        },
+      })),
+    },
+  });
+  return { success: true };
+}
+
 async function unclaimOrder({ rowNumber }) {
   const sheets = sheetsClient();
   const meta = await sheets.spreadsheets.get({ spreadsheetId: SPREADSHEET_ID, includeGridData: false });
@@ -434,6 +475,7 @@ ipcMain.handle('claim-order', async (_event, data) => { try { return await claim
 ipcMain.handle('claim-orders', async (_event, data) => { try { return await claimOrders(data || {}); } catch (error) { return { success: false, error: error.message }; } });
 ipcMain.handle('unclaim-order', async (_event, data) => { try { return await unclaimOrder(data); } catch (error) { return { success: false, error: error.message }; } });
 ipcMain.handle('complete-order', async (_event, data) => { try { return await completeOrder(data); } catch (error) { return { success: false, error: error.message }; } });
+ipcMain.handle('save-paper-qty', async (_event, data) => { try { return await savePaperQty(data || {}); } catch (error) { return { success: false, error: error.message }; } });
 ipcMain.handle('set-order-status', async (_event, data) => { try { return await setOrderStatus(data || {}); } catch (error) { return { success: false, error: error.message }; } });
 ipcMain.handle('print-order-document', async (_event, data) => { try { return await printOrderDocument(data || {}); } catch (error) { return { success: false, error: error.message }; } });
 ipcMain.handle('open-folder', async (_event, folderPath) => {

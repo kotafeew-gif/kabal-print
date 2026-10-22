@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld('kabalAPI', {
   claimOrders: (data) => ipcRenderer.invoke('claim-orders', data),
   unclaimOrder: (data) => ipcRenderer.invoke('unclaim-order', data),
   completeOrder: (data) => ipcRenderer.invoke('complete-order', data),
+  savePaperQty: (data) => ipcRenderer.invoke('save-paper-qty', data),
   setOrderStatus: (data) => ipcRenderer.invoke('set-order-status', data),
   openFolder: (folderPath) => ipcRenderer.invoke('open-folder', folderPath),
   printOrderDocument: (data) => ipcRenderer.invoke('print-order-document', data),

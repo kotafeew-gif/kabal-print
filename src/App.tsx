@@ -26,6 +26,7 @@ import {
 import './style.css';
 import { TAG_BY_ID, TAGS_BY_CATEGORY, CATEGORY_LABELS, CATEGORY_ORDER, PRODUCT_TYPES, type TagCategory } from './dictionaries';
 import { parseTz, type ParsedTz } from './parseTz';
+import { paperRowsFromTz } from './paperRows';
 
 export type { ParsedTz };
 
@@ -60,6 +61,7 @@ declare global {
         failed?: Array<{ rowNumber: number; error: string }>;
       }>;
       unclaimOrder?: (data: { rowNumber: number }) => Promise<{ success: boolean; error?: string; warning?: string }>;
+      savePaperQty?: (data: { rowNumber: number; paperQty?: string; paperDensity?: string }) => Promise<{ success: boolean; error?: string }>;
       setOrderStatus?: (data: { rowNumber: number; orderNumber: string; status: string }) => Promise<{ success: boolean; error?: string }>;
       completeOrder: (data: {
         rowNumber: number;
@@ -273,6 +275,10 @@ export default function App() {
   const [completePostpress, setCompletePostpress] = useState('');
   const [isCompleting, setIsCompleting] = useState(false);
 
+  // Бумага в карточке заявки: строки { qty, density }, как в окне завершения —
+  // несколько видов бумаги = несколько строк. Ключ — номер строки листа.
+  const [paperRowsByOrder, setPaperRowsByOrder] = useState<Record<number, Array<{ qty: string; density: string }>>>({});
+
   // Черновик формы завершения: если закрыть окно, не завершив заявку, введённое
   // сохранится в localStorage именно для этой заявки (ключ — номер строки листа).
   const completeDraftKey = (rowNumber: number) => `kabal-complete-draft-${rowNumber}`;
@@ -299,7 +305,10 @@ export default function App() {
     } catch {}
   };
 
-  // Автосохранение черновика при любом изменении полей формы
+  // Автосохранение черновика при любом изменении полей формы.
+  // Заодно синхронизируем бумагу обратно в блок карточки: правка в форме
+  // завершения должна быть видна в карточке, иначе при следующем открытии
+  // формы карточка (как более приоритетный источник) вернёт старое значение.
   useEffect(() => {
     if (!completeTarget) return;
     try {
@@ -308,6 +317,10 @@ export default function App() {
         JSON.stringify({ papers: completePapers, color: completeColor, postpress: completePostpress }),
       );
     } catch {}
+    setPaperRowsByOrder((prev) => ({
+      ...prev,
+      [completeTarget.rowNumber]: completePapers.map((p) => ({ ...p })),
+    }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [completePapers, completeColor, completePostpress, completeTarget]);
   const [error, setError] = useState('');
@@ -582,11 +595,19 @@ export default function App() {
   const openCompleteForm = (order: Order, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
 
+    const parsed = parsedOrdersMap.get(order.rowNumber) || parseTz(order.tz);
+    // Бумага: приоритет тому, что печатник уже записал — в карточке заявки
+    // (локальные строки) или ранее сохранённому в F/G. Только если там пусто —
+    // подтягиваем виды бумаги из ТЗ. getPaperRows учитывает оба случая.
+    const cardRows = getPaperRows(order).map((r) => ({ ...r }));
+
     // Если форму для этой заявки уже открывали и закрывали без завершения —
-    // вернуть сохранённый черновик вместо предзаполнения из ТЗ
+    // в localStorage лежит черновик. Он НЕ должен перебивать бумагу, введённую
+    // в карточке: карточка — свежие данные (печатник пишет расход на монтажах).
+    // Поэтому строки сливаются: непустое значение из карточки, иначе из черновика.
     const draft = loadCompleteDraft(order.rowNumber);
     if (draft) {
-      setCompletePapers(draft.papers && draft.papers.length ? draft.papers : [{ qty: '', density: '' }]);
+      setCompletePapers(mergePaperRows(cardRows, draft.papers));
       setCompleteColor(draft.color);
       setCompletePostpress(draft.postpress);
       setCompleteTarget(order);
@@ -595,24 +616,7 @@ export default function App() {
       return;
     }
 
-    const parsed = parsedOrdersMap.get(order.rowNumber) || parseTz(order.tz);
-
-    // Плотности бумаги из ТЗ — каждая становится отдельной строкой (листов = пусто)
-    const densitySet = new Set<string>();
-    for (const tagId of parsed.tags) {
-      const tag = TAG_BY_ID[tagId];
-      if (tag?.category === 'density') densitySet.add(tag.label.replace(/\s*г\/м²$/, ''));
-    }
-    // Плюс значения вида «350 гр», «300гр», «80 г/м2» из текста
-    const densityMatches = parsed.lines.join(' ').matchAll(/(\d{2,3})\s*(?:г\/м²|г\/м2|гр(?![а-яё])|г(?![а-яё]))/gi);
-    for (const m of densityMatches) densitySet.add(m[1]);
-
-    const densities = Array.from(densitySet);
-    setCompletePapers(
-      densities.length
-        ? densities.map((d) => ({ qty: '', density: d }))
-        : [{ qty: '', density: parsed.paper !== 'Не указана' ? parsed.paper : '' }],
-    );
+    setCompletePapers(cardRows);
 
     setCompleteColor(parsed.color || order.colorMode || '');
 
@@ -620,7 +624,10 @@ export default function App() {
       .map((id) => TAG_BY_ID[id])
       .filter((t) => t && t.category === 'operation')
       .map((t) => t!.label);
-    setCompletePostpress(opLabels.join(', '));
+    // Ламинация — первой: короткий код «лам мат30 -2», чтобы печатнику не пришлось
+    // выписывать её вручную из длинного текста ТЗ.
+    const lamShort = parsed.laminationShort;
+    setCompletePostpress(lamShort ? [lamShort, ...opLabels].join(', ') : opLabels.join(', '));
 
     setCompleteTarget(order);
     setError('');
@@ -672,14 +679,111 @@ export default function App() {
     }
   }
 
+  // Сохранение «Бумаги» из карточки: несколько строк { qty, density } → F и G.
+  // Печатник пишет расход бумаги на этапе монтажей, не дожидаясь окна завершения.
+  async function savePaperQty(rowNumber: number, rows: Array<{ qty: string; density: string }>) {
+    // Строки без данных отбрасываются, остальное склеивается переводом строки —
+    // ровно как в completeOrder (F: «100 листов SRA3\n50 листов SRA3»).
+    const filled = rows.filter((r) => r.qty.trim() || r.density.trim());
+    const paperQty = filled.map((r) => r.qty.trim()).filter(Boolean).join('\n');
+    const paperDensity = filled.map((r) => r.density.trim()).filter(Boolean).join('\n');
+    const order = orders.find((o) => o.rowNumber === rowNumber);
+    if (order && order.paperQuantity === paperQty && order.paperType === paperDensity) return;
+
+    setError('');
+    setNotice('');
+    try {
+      if (window.kabalAPI?.savePaperQty) {
+        const result = await window.kabalAPI.savePaperQty({ rowNumber, paperQty, paperDensity });
+        if (!result.success) {
+          setError(result.error || 'Не удалось сохранить бумагу');
+          return;
+        }
+      } else {
+        localMockOrders = localMockOrders.map((o) =>
+          o.rowNumber === rowNumber ? { ...o, paperQuantity: paperQty, paperType: paperDensity } : o,
+        );
+        setOrders([...localMockOrders]);
+        return;
+      }
+      // Обновить в списке сразу, не дожидаясь 15-секундного опроса.
+      // Уведомление не показываем: бумагу пишут по ходу работы, баннер только мешает.
+      setOrders((prev) =>
+        prev.map((o) => (o.rowNumber === rowNumber ? { ...o, paperQuantity: paperQty, paperType: paperDensity } : o)),
+      );
+    } catch (err: any) {
+      setError(err.message || 'Ошибка сохранения бумаги');
+    }
+  }
+
+  // Строки бумаги для карточки заявки: из F (кол-во) и G (плотность) по строкам.
+  // Если в листе ещё не записано — предзаполняем из ТЗ (paperRowsFromTz):
+  // несколько видов бумаги = несколько строк, как окно завершения это делает.
+  function rowsFromOrder(order?: Order): Array<{ qty: string; density: string }> {
+    if (!order) return [{ qty: '', density: '' }];
+    const qtyLines = (order.paperQuantity || '').split('\n').map((s) => s.trim());
+    const denLines = (order.paperType || '').split('\n').map((s) => s.trim());
+    const count = Math.max(qtyLines.length, denLines.length, 1);
+    const rows = Array.from({ length: count }, (_, i) => ({ qty: qtyLines[i] || '', density: denLines[i] || '' }));
+
+    // В листе уже есть хотя бы одна запись бумаги — не трогаем, что введено
+    if (rows.some((r) => r.qty || r.density)) return rows;
+
+    // В листе пусто — подтягиваем виды бумаги из ТЗ, как в окне завершения
+    const parsed = parsedOrdersMap.get(order.rowNumber) || parseTz(order.tz);
+    return paperRowsFromTz(parsed);
+  }
+
+  // Слияние строк бумаги: непустое значение из primary (карточка) побеждает,
+// пустые поля добиваются из secondary (черновик формы). Число строк — максимум.
+  function mergePaperRows(
+    primary: Array<{ qty: string; density: string }> | null | undefined,
+    secondary: Array<{ qty: string; density: string }> | null | undefined,
+  ): Array<{ qty: string; density: string }> {
+    const a = primary || [];
+    const b = secondary || [];
+    const len = Math.max(a.length, b.length, 1);
+    return Array.from({ length: len }, (_, i) => ({
+      qty: (a[i]?.qty || '').trim() ? a[i].qty : (b[i]?.qty || ''),
+      density: (a[i]?.density || '').trim() ? a[i].density : (b[i]?.density || ''),
+    }));
+  }
+
+  function getPaperRows(order: Order): Array<{ qty: string; density: string }> {
+    return paperRowsByOrder[order.rowNumber] ?? rowsFromOrder(order);
+  }
+
+  function updatePaperRow(rowNumber: number, idx: number, field: 'qty' | 'density', value: string) {
+    setPaperRowsByOrder((prev) => {
+      const base = prev[rowNumber] ?? rowsFromOrder(orders.find((o) => o.rowNumber === rowNumber));
+      const next = base.map((r, i) => (i === idx ? { ...r, [field]: value } : r));
+      return { ...prev, [rowNumber]: next };
+    });
+  }
+
+  function addPaperRow(rowNumber: number) {
+    setPaperRowsByOrder((prev) => ({
+      ...prev,
+      [rowNumber]: [
+        ...(prev[rowNumber] ?? rowsFromOrder(orders.find((o) => o.rowNumber === rowNumber))),
+        { qty: '', density: '' },
+      ],
+    }));
+  }
+
+  function removePaperRow(rowNumber: number, idx: number) {
+    const base = paperRowsByOrder[rowNumber] ?? rowsFromOrder(orders.find((o) => o.rowNumber === rowNumber));
+    const next = base.filter((_, i) => i !== idx);
+    setPaperRowsByOrder((prev) => ({ ...prev, [rowNumber]: next }));
+    void savePaperQty(rowNumber, next);
+  }
+
   const handleCopyOrder = (text: string, e: React.MouseEvent) => {
     e.stopPropagation();
     navigator.clipboard.writeText(text);
     setCopiedOrderId(text);
     setTimeout(() => setCopiedOrderId(null), 2000);
   };
-
-  // Открыть папку заказа в проводнике
   async function handleOpenFolder(folderPath: string, e: React.MouseEvent) {
     e.stopPropagation();
     setError('');
@@ -1819,13 +1923,61 @@ export default function App() {
                                 <span className="meta-key">Срок сдачи:</span>
                                 <span className="meta-val text-red-700 font-semibold">{order.deadline || '—'}</span>
                               </div>
-                              <div className="meta-row">
-                                <span className="meta-key">Кол-во бумаги:</span>
-                                <span className="meta-val">{order.paperQuantity || '—'}</span>
-                              </div>
-                              <div className="meta-row">
-                                <span className="meta-key">Тип бумаги:</span>
-                                <span className="meta-val">{order.paperType || '—'}</span>
+                              <div className="meta-row meta-row-paper">
+                                <span className="meta-key">Бумага:</span>
+                                {isMyOrder && !order.completed ? (
+                                  <div className="card-paper-block">
+                                    {getPaperRows(order).map((row, idx) => (
+                                      <div className="card-paper-row" key={idx}>
+                                        <input
+                                          className="card-paper-input"
+                                          placeholder="кол-во листов"
+                                          value={row.qty}
+                                          onChange={(e) => updatePaperRow(order.rowNumber, idx, 'qty', e.target.value)}
+                                          onBlur={() => savePaperQty(order.rowNumber, getPaperRows(order))}
+                                          onKeyDown={(e) => {
+                                            if (e.key === 'Enter') {
+                                              (e.target as HTMLInputElement).blur();
+                                            }
+                                          }}
+                                        />
+                                        <input
+                                          className="card-paper-input"
+                                          placeholder="плотность / тип"
+                                          value={row.density}
+                                          onChange={(e) => updatePaperRow(order.rowNumber, idx, 'density', e.target.value)}
+                                          onBlur={() => savePaperQty(order.rowNumber, getPaperRows(order))}
+                                          onKeyDown={(e) => {
+                                            if (e.key === 'Enter') {
+                                              (e.target as HTMLInputElement).blur();
+                                            }
+                                          }}
+                                        />
+                                        <button
+                                          className="btn-remove-paper"
+                                          title="Удалить этот вид бумаги"
+                                          disabled={getPaperRows(order).length === 1}
+                                          onClick={() => removePaperRow(order.rowNumber, idx)}
+                                        >
+                                          ✕
+                                        </button>
+                                      </div>
+                                    ))}
+                                    <button
+                                      className="btn-add-paper"
+                                      onClick={() => addPaperRow(order.rowNumber)}
+                                    >
+                                      + Добавить вид бумаги
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <span className="meta-val">
+                                    {order.paperQuantity || '—'}
+                                    {order.paperType && (
+                                      <span className="paper-type-sub"> · {order.paperType}</span>
+                                    )}
+                                  </span>
+                                )}
                               </div>
                               <div className="meta-row">
                                 <span className="meta-key">Цветность:</span>

@@ -1,5 +1,5 @@
 import { extractTags, laminationTagIds } from './dictionaries.ts';
-import { detectLamination } from './lamination.ts';
+import { detectLamination, laminationShortCode } from './lamination.ts';
 
 export interface ParsedTz {
   product: string;
@@ -8,6 +8,8 @@ export interface ParsedTz {
   lamination: string;
   /** Есть ли ламинация вообще (для фильтра «С ламинацией»). */
   hasLamination: boolean;
+  /** Короткий код ламинации для формы завершения: «лам мат30 -2» (пусто — нет). */
+  laminationShort: string;
   color: string;
   postpress: string[];
   tags: string[];
@@ -77,27 +79,48 @@ function matchQty(source: string): string {
   return `${num} ${unit}`;
 }
 
+/** Тираж из одной строки: сначала паттерн «N видов по M ед.», затем «число + единица». */
+function qtyFromLine(line: string): string {
+  // «тираж 2 вида по 50 штук» → «2 видов по 50 шт»
+  const perKind = line.match(/(\d+)[ \t]*вид\w*[^.\n]{0,25}?по[ \t]*(\d[\d \t\u00A0]*)[ \t]*(штук|штуки|шт|экз|комплект\w*|компл)(?![а-яё])/i);
+  if (perKind) {
+    const unit = QTY_UNITS.find((u) => u.re.test(perKind[3]))?.label || perKind[3].toLowerCase();
+    return `${perKind[1]} видов по ${perKind[2].replace(/[ \t\u00A0]+/g, ' ').trim()} ${unit}`;
+  }
+  return matchQty(line);
+}
+
 export function parseQuantity(text: string): string {
   const lines = String(text || '').split('\n');
+  const tirageLines = lines.filter((l) => /тираж/i.test(l));
 
-  // 1) Приоритет — строка, где явно написано «тираж».
-  //    Иначе в заявке с составными частями («Вкладыш — 1 шт.») тираж
-  //    подхватывался бы из первой попавшейся строки.
-  for (const line of lines) {
-    if (!/тираж/i.test(line)) continue;
-
-    // «тираж 2 вида по 50 штук» → «2 видов по 50 шт»
-    const perKind = line.match(/(\d+)[ \t]*вид\w*[^.\n]{0,25}?по[ \t]*(\d[\d \t\u00A0]*)[ \t]*(штук|штуки|шт|экз|комплект\w*|компл)(?![а-яё])/i);
-    if (perKind) {
-      const unit = QTY_UNITS.find((u) => u.re.test(perKind[3]))?.label || perKind[3].toLowerCase();
-      return `${perKind[1]} видов по ${perKind[2].replace(/[ \t\u00A0]+/g, ' ').trim()} ${unit}`;
-    }
-
-    const q = matchQty(line);
+  // 1) Приоритет — итоговая строка с маркером «общий/итог/всего/суммарн»:
+  //    «общий тираж: 8000шт» — это тираж всего заказа, а не одной позиции.
+  for (const line of tirageLines) {
+    if (!/(общ|итог|суммарн|всего)/i.test(line)) continue;
+    const q = qtyFromLine(line);
     if (q) return q;
   }
 
-  // 2) Фолбэк — любое место в тексте
+  // 2) Строка «Тираж : N ед.» (двоеточие после «тираж») — менеджер пишет её в
+  //    конце составного ТЗ как итог: «Судья… тираж 1 штука / … тираж 1 штук /
+  //    … тираж 3 штуки / Тираж : 5 экз.». Первая попавшаяся строка — это тираж
+  //    одной позиции, а не всего заказа.
+  for (const line of tirageLines) {
+    if (!/тираж\s*[:：]/i.test(line)) continue;
+    const q = qtyFromLine(line);
+    if (q) return q;
+  }
+
+  // 3) Первая строка со словом «тираж», где есть число с единицей.
+  //    Иначе в заявке с составными частями («Вкладыш — 1 шт.») тираж
+  //    подхватывался бы из первой попавшейся строки.
+  for (const line of tirageLines) {
+    const q = qtyFromLine(line);
+    if (q) return q;
+  }
+
+  // 4) Крайний фолбэк — любое место в тексте
   return matchQty(text);
 }
 
@@ -200,6 +223,7 @@ export function parseTz(text: string, fallbackPaperQty?: string, fallbackPaperTy
     paper: paper || 'Не указана',
     lamination,
     hasLamination: laminationInfo.has,
+    laminationShort: laminationShortCode(body, laminationInfo),
     color: color || '',
     postpress: postpressItems,
     tags: [
