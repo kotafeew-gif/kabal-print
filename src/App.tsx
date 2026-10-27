@@ -27,6 +27,7 @@ import './style.css';
 import { TAG_BY_ID, TAGS_BY_CATEGORY, CATEGORY_LABELS, CATEGORY_ORDER, PRODUCT_TYPES, type TagCategory } from './dictionaries';
 import { parseTz, type ParsedTz } from './parseTz';
 import { paperRowsFromTz } from './paperRows';
+import { mathHint, normalizeMathField } from './mathEval';
 
 export type { ParsedTz };
 
@@ -106,6 +107,18 @@ function formatBytes(bytes?: number): string {
 
 function isRemoteResource(value: string): boolean {
   return /^https?:\/\//i.test(value.trim());
+}
+
+// Подсказка встроенного калькулятора под полем бумаги: «155+53» → «= 208»,
+// «155+» → «неверное выражение». Обычные числа/текст подсказку не показывают.
+function CalcHint({ value }: { value: string }) {
+  const hint = mathHint(value);
+  if (!hint.result && !hint.error) return null;
+  return (
+    <span className={`calc-hint${hint.error ? ' calc-hint-err' : ''}`}>
+      {hint.error ? 'неверное выражение' : `= ${hint.result}`}
+    </span>
+  );
 }
 
 function parseDateTimeValue(value: string): number {
@@ -258,6 +271,15 @@ export default function App() {
   // «убегает» из-под курсора при перерисовке
   const draggingRef = React.useRef(false);
 
+  // Защита от «отката»: 15-секундный опрос не должен перезаписывать экран
+  // старыми данными в момент, когда пользователь жмёт «Готово»/«Взять в
+  // работу»/меняет статус и запись ещё не дошла до таблицы. Пока идёт запись —
+  // опрос пропускает тики (глубина: несколько записей одновременно держат
+  // защиту включённой), а ответы опроса, стартовавшего ДО записи, отбрасываются
+  // по счётчику: они читали лист до неё и вернули бы устаревшее состояние.
+  const mutationDepthRef = React.useRef(0);
+  const mutationTickRef = React.useRef(0);
+
   // Выделение нескольких заявок сразу: у одного заказчика часто несколько заявок,
   // их надо взять в работу одним действием. Храним номера строк листа.
   const [selectedRows, setSelectedRows] = useState<number[]>([]);
@@ -344,15 +366,23 @@ export default function App() {
   });
   const [resizing, setResizing] = useState<{ index: number; startX: number; startWidth: number } | null>(null);
 
-  const load = async () => {
+  const load = async (opts?: { force?: boolean }) => {
     // Не перерисовываем список, пока пользователь тащит карточку на доске
     if (draggingRef.current) return;
+    // Опрос (интервал) пропускает тик, пока идёт запись в таблицу — обработчики
+    // записей сами перезагружают список по завершении (load({ force: true })).
+    if (!opts?.force && mutationDepthRef.current > 0) return;
+    // Момент старта: если за время загрузки началась запись, ответ устарел.
+    const startTick = mutationTickRef.current;
     setIsRefreshing(true);
     try {
       if (window.kabalAPI) {
         setIsElectron(true);
         const result = await window.kabalAPI.loadOrders();
         if (result.success && result.orders) {
+          // Во время загрузки началась запись — лист читали до неё, данные
+          // старые, экран не перезаписываем; свежее придёт после записи.
+          if (mutationTickRef.current !== startTick) return;
           setOrders(result.orders);
           setError('');
         } else {
@@ -440,13 +470,20 @@ export default function App() {
     setError('');
     setNotice('');
     if (window.kabalAPI) {
-      const result = await window.kabalAPI.claimOrder({ rowNumber: order.rowNumber, printer });
-      if (!result.success) {
-        setError(result.error || 'Не удалось взять заявку');
-        return;
+      // Пока запись идёт, опрос не должен перезаписывать экран старыми данными
+      mutationDepthRef.current += 1;
+      mutationTickRef.current += 1;
+      try {
+        const result = await window.kabalAPI.claimOrder({ rowNumber: order.rowNumber, printer });
+        if (!result.success) {
+          setError(result.error || 'Не удалось взять заявку');
+          return;
+        }
+        if (result.warning) setNotice(result.warning);
+        await load({ force: true });
+      } finally {
+        mutationDepthRef.current -= 1;
       }
-      if (result.warning) setNotice(result.warning);
-      await load();
     } else {
       const current = localMockOrders.find((o) => o.rowNumber === order.rowNumber);
       if (current && current.printer && current.printer !== printer) {
@@ -490,6 +527,8 @@ export default function App() {
     setError('');
     setNotice('');
     setIsBulkClaiming(true);
+    mutationDepthRef.current += 1;
+    mutationTickRef.current += 1;
     try {
       if (window.kabalAPI?.claimOrders) {
         const result = await window.kabalAPI.claimOrders({
@@ -515,7 +554,7 @@ export default function App() {
           setNotice(`Взято в работу: ${claimedCount} (${PRINTERS_CONFIG[printer]?.label || printer})`);
         }
         setSelectedRows([]);
-        await load();
+        await load({ force: true });
       } else {
         localMockOrders = localMockOrders.map((o) =>
           targets.some((t) => t.rowNumber === o.rowNumber) ? { ...o, printer } : o,
@@ -528,6 +567,7 @@ export default function App() {
       setError(err?.message || 'Не удалось взять заявки');
     } finally {
       setIsBulkClaiming(false);
+      mutationDepthRef.current -= 1;
     }
   }
 
@@ -539,21 +579,27 @@ export default function App() {
     setNotice('');
 
     // Сразу показываем выбранный статус, откат — если запись не удалась
-    setOrders((prev) => prev.map((o) => (o.rowNumber === order.rowNumber ? { ...o, status } : o)));
+    mutationDepthRef.current += 1;
+    mutationTickRef.current += 1;
+    try {
+      setOrders((prev) => prev.map((o) => (o.rowNumber === order.rowNumber ? { ...o, status } : o)));
 
-    if (window.kabalAPI?.setOrderStatus) {
-      const result = await window.kabalAPI.setOrderStatus({
-        rowNumber: order.rowNumber,
-        orderNumber: order.orderNumber,
-        status,
-      });
-      if (!result.success) {
-        setError(result.error || 'Не удалось сохранить статус заявки');
-        await load();
+      if (window.kabalAPI?.setOrderStatus) {
+        const result = await window.kabalAPI.setOrderStatus({
+          rowNumber: order.rowNumber,
+          orderNumber: order.orderNumber,
+          status,
+        });
+        if (!result.success) {
+          setError(result.error || 'Не удалось сохранить статус заявки');
+          await load({ force: true });
+        }
+      } else {
+        localMockOrders = localMockOrders.map((o) => (o.rowNumber === order.rowNumber ? { ...o, status } : o));
+        setOrders([...localMockOrders]);
       }
-    } else {
-      localMockOrders = localMockOrders.map((o) => (o.rowNumber === order.rowNumber ? { ...o, status } : o));
-      setOrders([...localMockOrders]);
+    } finally {
+      mutationDepthRef.current -= 1;
     }
   }
 
@@ -563,13 +609,19 @@ export default function App() {
     setError('');
     setNotice('');
     if (window.kabalAPI && window.kabalAPI.unclaimOrder) {
-      const result = await window.kabalAPI.unclaimOrder({ rowNumber: order.rowNumber });
-      if (!result.success) {
-        setError(result.error || 'Не удалось освободить заявку');
-        return;
+      mutationDepthRef.current += 1;
+      mutationTickRef.current += 1;
+      try {
+        const result = await window.kabalAPI.unclaimOrder({ rowNumber: order.rowNumber });
+        if (!result.success) {
+          setError(result.error || 'Не удалось освободить заявку');
+          return;
+        }
+        if (result.warning) setNotice(result.warning);
+        await load({ force: true });
+      } finally {
+        mutationDepthRef.current -= 1;
       }
-      if (result.warning) setNotice(result.warning);
-      await load();
     } else {
       localMockOrders = localMockOrders.map((o) => (o.rowNumber === order.rowNumber ? { ...o, printer: '' } : o));
       setOrders([...localMockOrders]);
@@ -642,11 +694,16 @@ export default function App() {
   // Подтвердить завершение — записать F/G/H/I и закрыть заявку
   async function submitComplete() {
     if (!completeTarget) return;
-    const papers = completePapers.filter((p) => p.qty.trim() || p.density.trim());
+    // Выражения в полях бумаги («155+53») считаем до записи («208»)
+    const papers = completePapers
+      .filter((p) => p.qty.trim() || p.density.trim())
+      .map((p) => ({ qty: normalizeMathField(p.qty), density: normalizeMathField(p.density) }));
     const paperQty = papers.map((p) => p.qty.trim()).filter(Boolean).join('\n');
     const paperDensity = papers.map((p) => p.density.trim()).filter(Boolean).join('\n');
 
     setIsCompleting(true);
+    mutationDepthRef.current += 1;
+    mutationTickRef.current += 1;
     try {
       if (window.kabalAPI) {
         const result = await window.kabalAPI.completeOrder({
@@ -672,16 +729,21 @@ export default function App() {
       }
       closeCompleteForm();
       clearCompleteDraft(completeTarget.rowNumber);
-      await load();
+      await load({ force: true });
     } catch (err: any) {
       setError(err.message || 'Ошибка завершения заявки');
       setIsCompleting(false);
+    } finally {
+      mutationDepthRef.current -= 1;
     }
   }
 
   // Сохранение «Бумаги» из карточки: несколько строк { qty, density } → F и G.
   // Печатник пишет расход бумаги на этапе монтажей, не дожидаясь окна завершения.
   async function savePaperQty(rowNumber: number, rows: Array<{ qty: string; density: string }>) {
+    // Выражения («155+53») считаем до записи («208») — в листе должны лежать
+    // числа, а не арифметика. normalizeMathField оставляет обычный текст как есть.
+    rows = rows.map((r) => ({ qty: normalizeMathField(r.qty), density: normalizeMathField(r.density) }));
     // Строки без данных отбрасываются, остальное склеивается переводом строки —
     // ровно как в completeOrder (F: «100 листов SRA3\n50 листов SRA3»).
     const filled = rows.filter((r) => r.qty.trim() || r.density.trim());
@@ -693,6 +755,8 @@ export default function App() {
     setError('');
     setNotice('');
     try {
+      mutationDepthRef.current += 1;
+      mutationTickRef.current += 1;
       if (window.kabalAPI?.savePaperQty) {
         const result = await window.kabalAPI.savePaperQty({ rowNumber, paperQty, paperDensity });
         if (!result.success) {
@@ -713,6 +777,8 @@ export default function App() {
       );
     } catch (err: any) {
       setError(err.message || 'Ошибка сохранения бумаги');
+    } finally {
+      mutationDepthRef.current -= 1;
     }
   }
 
@@ -777,6 +843,24 @@ export default function App() {
     setPaperRowsByOrder((prev) => ({ ...prev, [rowNumber]: next }));
     void savePaperQty(rowNumber, next);
   }
+
+  // Уход из поля бумаги в карточке: выражения («155+53») показываем посчитанными
+  // («208») и сохраняем результат, а не исходную арифметику.
+  const handlePaperBlur = (rowNumber: number) => {
+    const base = paperRowsByOrder[rowNumber] ?? rowsFromOrder(orders.find((o) => o.rowNumber === rowNumber));
+    const normalized = base.map((r) => ({ qty: normalizeMathField(r.qty), density: normalizeMathField(r.density) }));
+    setPaperRowsByOrder((prev) => ({ ...prev, [rowNumber]: normalized }));
+    void savePaperQty(rowNumber, normalized);
+  };
+
+  // То же для строк бумаги в окне завершения.
+  const handleCompletePaperBlur = (idx: number) => {
+    setCompletePapers((prev) =>
+      prev.map((p, i) =>
+        i === idx ? { qty: normalizeMathField(p.qty), density: normalizeMathField(p.density) } : p,
+      ),
+    );
+  };
 
   const handleCopyOrder = (text: string, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -1228,7 +1312,7 @@ export default function App() {
 
         <button
           className={`btn-refresh ${isRefreshing ? 'spinning' : ''}`}
-          onClick={load}
+          onClick={() => load()}
           title="Обновить таблицу из Google Sheets"
         >
           <RefreshCw size={15} />
@@ -1929,30 +2013,36 @@ export default function App() {
                                   <div className="card-paper-block">
                                     {getPaperRows(order).map((row, idx) => (
                                       <div className="card-paper-row" key={idx}>
-                                        <input
-                                          className="card-paper-input"
-                                          placeholder="кол-во листов"
-                                          value={row.qty}
-                                          onChange={(e) => updatePaperRow(order.rowNumber, idx, 'qty', e.target.value)}
-                                          onBlur={() => savePaperQty(order.rowNumber, getPaperRows(order))}
-                                          onKeyDown={(e) => {
-                                            if (e.key === 'Enter') {
-                                              (e.target as HTMLInputElement).blur();
-                                            }
-                                          }}
-                                        />
-                                        <input
-                                          className="card-paper-input"
-                                          placeholder="плотность / тип"
-                                          value={row.density}
-                                          onChange={(e) => updatePaperRow(order.rowNumber, idx, 'density', e.target.value)}
-                                          onBlur={() => savePaperQty(order.rowNumber, getPaperRows(order))}
-                                          onKeyDown={(e) => {
-                                            if (e.key === 'Enter') {
-                                              (e.target as HTMLInputElement).blur();
-                                            }
-                                          }}
-                                        />
+                                        <div className="calc-field">
+                                          <input
+                                            className="card-paper-input"
+                                            placeholder="кол-во листов"
+                                            value={row.qty}
+                                            onChange={(e) => updatePaperRow(order.rowNumber, idx, 'qty', e.target.value)}
+                                            onBlur={() => handlePaperBlur(order.rowNumber)}
+                                            onKeyDown={(e) => {
+                                              if (e.key === 'Enter') {
+                                                (e.target as HTMLInputElement).blur();
+                                              }
+                                            }}
+                                          />
+                                          <CalcHint value={row.qty} />
+                                        </div>
+                                        <div className="calc-field">
+                                          <input
+                                            className="card-paper-input"
+                                            placeholder="плотность / тип"
+                                            value={row.density}
+                                            onChange={(e) => updatePaperRow(order.rowNumber, idx, 'density', e.target.value)}
+                                            onBlur={() => handlePaperBlur(order.rowNumber)}
+                                            onKeyDown={(e) => {
+                                              if (e.key === 'Enter') {
+                                                (e.target as HTMLInputElement).blur();
+                                              }
+                                            }}
+                                          />
+                                          <CalcHint value={row.density} />
+                                        </div>
                                         <button
                                           className="btn-remove-paper"
                                           title="Удалить этот вид бумаги"
@@ -2281,27 +2371,35 @@ export default function App() {
                   </div>
                   {completePapers.map((paper, idx) => (
                     <div className="paper-row" key={idx}>
-                      <input
-                        type="text"
-                        inputMode="numeric"
-                        placeholder="напр. 120"
-                        value={paper.qty}
-                        onChange={(e) =>
-                          setCompletePapers((prev) =>
-                            prev.map((p, i) => (i === idx ? { ...p, qty: e.target.value } : p)),
-                          )
-                        }
-                      />
-                      <input
-                        type="text"
-                        placeholder="напр. 350 / картон / дизайнерская"
-                        value={paper.density}
-                        onChange={(e) =>
-                          setCompletePapers((prev) =>
-                            prev.map((p, i) => (i === idx ? { ...p, density: e.target.value } : p)),
-                          )
-                        }
-                      />
+                      <div className="calc-field">
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          placeholder="напр. 120"
+                          value={paper.qty}
+                          onChange={(e) =>
+                            setCompletePapers((prev) =>
+                              prev.map((p, i) => (i === idx ? { ...p, qty: e.target.value } : p)),
+                            )
+                          }
+                          onBlur={() => handleCompletePaperBlur(idx)}
+                        />
+                        <CalcHint value={paper.qty} />
+                      </div>
+                      <div className="calc-field">
+                        <input
+                          type="text"
+                          placeholder="напр. 350 / картон / дизайнерская"
+                          value={paper.density}
+                          onChange={(e) =>
+                            setCompletePapers((prev) =>
+                              prev.map((p, i) => (i === idx ? { ...p, density: e.target.value } : p)),
+                            )
+                          }
+                          onBlur={() => handleCompletePaperBlur(idx)}
+                        />
+                        <CalcHint value={paper.density} />
+                      </div>
                       <button
                         className="btn-remove-paper"
                         title="Удалить этот вид бумаги"
