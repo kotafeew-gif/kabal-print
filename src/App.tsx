@@ -21,13 +21,16 @@ import {
   Package,
   Tag,
   FolderOpen,
-  Globe2
+  Globe2,
+  Grid2x2
 } from 'lucide-react';
 import './style.css';
 import { TAG_BY_ID, TAGS_BY_CATEGORY, CATEGORY_LABELS, CATEGORY_ORDER, PRODUCT_TYPES, type TagCategory } from './dictionaries';
 import { parseTz, type ParsedTz } from './parseTz';
 import { paperRowsFromTz } from './paperRows';
 import { mathHint, normalizeMathField } from './mathEval';
+import CutCalculator from './CutCalculator';
+import PaperCutCalculator from './PaperCutCalculator';
 
 export type { ParsedTz };
 
@@ -76,6 +79,7 @@ declare global {
         folderPath?: string;
         orderNumber?: string;
       }) => Promise<{ success: boolean; error?: string; printedFile?: string; noDocument?: boolean }>;
+      printCutLayout?: (data: { html: string; title?: string }) => Promise<{ success: boolean; error?: string }>;
       getUpdateState: () => Promise<UpdateState | null>;
       checkUpdates: () => Promise<UpdateState | null>;
       downloadUpdate: () => Promise<boolean>;
@@ -247,6 +251,18 @@ export default function App() {
   const [printer, setPrinter] = useState('');
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [query, setQuery] = useState('');
+  // Поле поиска и сам фильтр — разные состояния. В таблице больше 6000 строк:
+  // фильтровать их на каждую введённую букву — это и был «лаг» при вводе.
+  // Ввод обновляется мгновенно, а фильтр — через паузу после набора.
+  const [queryInput, setQueryInput] = useState('');
+  const searchPending = queryInput.trim() !== query.trim();
+
+  useEffect(() => {
+    const next = queryInput;
+    if (next.trim() === query.trim()) return;
+    const timer = setTimeout(() => setQuery(next), 300);
+    return () => clearTimeout(timer);
+  }, [queryInput, query]);
   const [sortBy, setSortBy] = useState<string>('deadline');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
   const [statusFilter, setStatusFilter] = useState<'all' | 'free' | 'my' | 'my-free' | 'в' | 'к' | 'm'>('all');
@@ -301,6 +317,12 @@ export default function App() {
   // несколько видов бумаги = несколько строк. Ключ — номер строки листа.
   const [paperRowsByOrder, setPaperRowsByOrder] = useState<Record<number, Array<{ qty: string; density: string }>>>({});
 
+  // Окно «Раскрой»: калькулятор раскроя бумаги (paper-calc-pro).
+  const [cutTarget, setCutTarget] = useState<Order | null>(null);
+
+  // Окно «Предрасчёт»: сколько изделий влезает на печатный лист и сколько листов.
+  const [precalcTarget, setPrecalcTarget] = useState<Order | null>(null);
+
   // Черновик формы завершения: если закрыть окно, не завершив заявку, введённое
   // сохранится в localStorage именно для этой заявки (ключ — номер строки листа).
   const completeDraftKey = (rowNumber: number) => `kabal-complete-draft-${rowNumber}`;
@@ -349,6 +371,10 @@ export default function App() {
   const [notice, setNotice] = useState('');
   const [isElectron, setIsElectron] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  // Первая загрузка: пока лист не прочитан, показываем спиннер, а не пустой экран.
+  const [initialLoading, setInitialLoading] = useState(true);
+  // Инфинити-скролл: в архиве бывают тысячи строк, рендерим порциями.
+  const [visibleCount, setVisibleCount] = useState(40);
   const [copiedOrderId, setCopiedOrderId] = useState<string | null>(null);
   const [appVersion, setAppVersion] = useState('');
   const [updateState, setUpdateState] = useState<UpdateState | null>(null);
@@ -397,6 +423,7 @@ export default function App() {
     } catch (e: any) {
       setError(e.message || 'Ошибка соединения');
     } finally {
+      setInitialLoading(false);
       setTimeout(() => setIsRefreshing(false), 300);
     }
   };
@@ -975,12 +1002,35 @@ export default function App() {
   }, [orders, printer]);
 
   // Filtered and sorted orders
+  // Индекс поиска: всё, по чему ищем, приведено к нижнему регистру ОДИН раз,
+  // а не на каждую введённую букву. Иначе поиск по 6000+ строкам каждый раз
+  // переводил в нижний регистр мегабайты текста ТЗ.
+  // Строится только когда поиск реально идёт (hasQuery), иначе 15-секундный
+  // опрос каждый раз пересобирал бы индекс впустую.
+  const hasQuery = query.trim() !== '';
+  const searchIndex = useMemo(() => {
+    const map = new Map<number, { number: string; client: string; hay: string }>();
+    if (!hasQuery) return map;
+    for (const o of orders) {
+      const parsed = parsedOrdersMap.get(o.rowNumber);
+      map.set(o.rowNumber, {
+        number: (o.orderNumber || '').toLowerCase(),
+        client: (o.client || '').toLowerCase(),
+        hay: [o.tz, o.manager, o.paperType, parsed?.product]
+          .map((v) => String(v || '').toLowerCase())
+          .join('\n'),
+      });
+    }
+    return map;
+  }, [orders, parsedOrdersMap, hasQuery]);
+
   const filteredOrders = useMemo(() => {
     return orders
       .filter((order) => {
         const q = query.trim().toLowerCase();
-        const matchNumber = q !== '' && order.orderNumber.toLowerCase().includes(q);
-        const matchClient = q !== '' && order.client.toLowerCase().includes(q);
+        const idx = searchIndex.get(order.rowNumber);
+        const matchNumber = q !== '' && Boolean(idx?.number.includes(q));
+        const matchClient = q !== '' && Boolean(idx?.client.includes(q));
 
         // Completed toggle: если идёт поиск по номеру заявки или заказчику —
         // выполненные заявки показываем тоже, галочка «Показать архив» не нужна
@@ -1042,11 +1092,7 @@ export default function App() {
 
         // Search Query
         if (q) {
-          const matchTz = order.tz.toLowerCase().includes(q);
-          const matchManager = order.manager.toLowerCase().includes(q);
-          const matchPaper = (order.paperType || '').toLowerCase().includes(q);
-          const matchProduct = (parsed?.product || '').toLowerCase().includes(q);
-          if (!matchNumber && !matchClient && !matchTz && !matchManager && !matchPaper && !matchProduct) {
+          if (!matchNumber && !matchClient && !(idx && idx.hay.includes(q))) {
             return false;
           }
         }
@@ -1105,6 +1151,7 @@ export default function App() {
     sortBy,
     sortDirection,
     parsedOrdersMap,
+    searchIndex,
   ]);
 
   // Свободные заявки текущего списка — только их можно выделить и взять пакетом
@@ -1112,6 +1159,39 @@ export default function App() {
     () => filteredOrders.filter((o) => !o.completed && !o.printer).map((o) => o.rowNumber),
     [filteredOrders],
   );
+
+  // ── Инфинити-скролл ───────────────────────────────────────────────────────
+  // В архиве бывают тысячи строк: рендерим первые 40 и досыпаем по мере прокрутки.
+  // Новый фильтр/сортировка — снова с первой порции, иначе пользователь
+  // остаётся на «дне» старого списка.
+  useEffect(() => {
+    setVisibleCount(40);
+  }, [query, statusFilter, productFilter, materialFilter, laminationFilter, laminationKind, showCompleted, printer, selectedTags, sortBy, sortDirection]);
+
+  const visibleOrders = useMemo(
+    () => filteredOrders.slice(0, visibleCount),
+    [filteredOrders, visibleCount],
+  );
+
+  const loadMoreRef = React.useRef<HTMLDivElement | null>(null);
+  const hasMore = visibleCount < filteredOrders.length;
+
+  useEffect(() => {
+    if (!hasMore) return;
+    const node = loadMoreRef.current;
+    if (!node) return;
+    // root = контейнер списка: страница не скроллится целиком, скролл внутри main.
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          setVisibleCount((prev) => prev + 40);
+        }
+      },
+      { rootMargin: '400px' },
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [hasMore, visibleCount, filteredOrders.length]);
 
   const selectedFreeRows = useMemo(
     () => selectedRows.filter((row) => selectableFreeRows.includes(row)),
@@ -1339,16 +1419,17 @@ export default function App() {
       {/* Control Panel: Filters, Search, Sorting */}
       <div className="control-panel">
         {/* Search */}
-        <div className="search-box">
+        <div className={`search-box ${searchPending ? 'search-busy' : ''}`}>
           <Search size={16} className="search-icon" />
           <input
             type="text"
             placeholder="Поиск по № заявки, клиенту, ТЗ, менеджеру, материалу..."
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            value={queryInput}
+            onChange={(e) => setQueryInput(e.target.value)}
           />
-          {query && (
-            <button className="clear-search" onClick={() => setQuery('')}>
+          {searchPending && <RefreshCw size={14} className="search-spinner" />}
+          {!searchPending && queryInput && (
+            <button className="clear-search" onClick={() => { setQueryInput(''); setQuery(''); }}>
               ✕
             </button>
           )}
@@ -1679,7 +1760,12 @@ export default function App() {
           </div>
 
           {/* Table Rows */}
-          {filteredOrders.length === 0 ? (
+          {initialLoading && orders.length === 0 ? (
+            <div className="list-loading">
+              <RefreshCw size={26} className="list-spinner" />
+              <span>Загружаем заявки из таблицы…</span>
+            </div>
+          ) : filteredOrders.length === 0 ? (
             <div className="empty-state">
               <Package size={40} className="text-slate-400" />
               <h3>Заявок не найдено</h3>
@@ -1687,6 +1773,7 @@ export default function App() {
               <button
                 className="btn-reset"
                 onClick={() => {
+                  setQueryInput('');
                   setQuery('');
                   setStatusFilter('all');
                   setProductFilter('all');
@@ -1701,7 +1788,7 @@ export default function App() {
             </div>
           ) : (
             <div className="compact-table-body">
-              {filteredOrders.map((order) => {
+              {visibleOrders.map((order) => {
                 const parsed = parsedOrdersMap.get(order.rowNumber) || parseTz(order.tz);
                 const isExpanded = expandedId === `${order.rowNumber}-${order.orderNumber}`;
                 const isMyOrder = printer && order.printer === printer;
@@ -2148,6 +2235,16 @@ export default function App() {
                                   >
                                     <Undo2 size={16} /> Отказаться
                                   </button>
+                                  <button
+                                    className="btn-precalc-large"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setPrecalcTarget(order);
+                                    }}
+                                    title="Предрасчёт: сколько изделий влезает на печатный лист и сколько нужно листов"
+                                  >
+                                    <Grid2x2 size={16} /> Предрасчёт
+                                  </button>
                                 </div>
                               ) : (
                                 <span className="actions-note">
@@ -2173,6 +2270,16 @@ export default function App() {
                                   </button>
                                 );
                               })()}
+                              <button
+                                className="btn-cut-card"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setCutTarget(order);
+                                }}
+                                title="Раскрой бумаги: калькулятор раскроя нестандартных листов"
+                              >
+                                <Grid2x2 size={15} /> Раскрой
+                              </button>
                               <button
                                 className="btn-print-card"
                                 onClick={(e) => handlePrintCard(order, e)}
@@ -2204,6 +2311,12 @@ export default function App() {
                   </div>
                 );
               })}
+              {/* Инфинити-скролл: сентинел досыпает следующую порцию при прокрутке */}
+              {hasMore && (
+                <div className="list-more" ref={loadMoreRef}>
+                  Показано {visibleOrders.length} из {filteredOrders.length} · прокрутите, чтобы загрузить ещё
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -2455,6 +2568,39 @@ export default function App() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Раскрой бумаги: полный калькулятор (paper-calc-pro) */}
+      {cutTarget && (
+        <PaperCutCalculator
+          orderNumber={cutTarget.orderNumber}
+          client={cutTarget.client}
+          tz={cutTarget.tz}
+          parsed={parsedOrdersMap.get(cutTarget.rowNumber) || parseTz(cutTarget.tz)}
+          onClose={() => setCutTarget(null)}
+        />
+      )}
+
+      {/* Предрасчёт: раскладка изделий на печатном листе и количество листов */}
+      {precalcTarget && (
+        <CutCalculator
+          orderNumber={precalcTarget.orderNumber}
+          client={precalcTarget.client}
+          tz={precalcTarget.tz}
+          parsed={parsedOrdersMap.get(precalcTarget.rowNumber) || parseTz(precalcTarget.tz)}
+          onWriteQty={(sheets) => {
+            const order = precalcTarget;
+            // Пишем в первую строку бумаги (F) — там же, где печатник вводит
+            // расход вручную. Пустые поля не затираем.
+            const rows = (paperRowsByOrder[order.rowNumber] ?? rowsFromOrder(order)).map((r, i) =>
+              i === 0 ? { ...r, qty: String(sheets) } : r,
+            );
+            setPaperRowsByOrder((prev) => ({ ...prev, [order.rowNumber]: rows }));
+            void savePaperQty(order.rowNumber, rows);
+            setPrecalcTarget(null);
+          }}
+          onClose={() => setPrecalcTarget(null)}
+        />
       )}
     </div>
   );

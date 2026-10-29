@@ -410,6 +410,37 @@ async function printTextFile(filePath, title) {
   }
 }
 
+/** Печатает готовую HTML-страницу (раскрой для резчика) через скрытое окно. */
+async function printCutLayout({ html, title }) {
+  const markup = String(html || '');
+  if (!markup.trim()) return { success: false, error: 'Пустой документ раскроя' };
+
+  const tmpFile = path.join(os.tmpdir(), `kabal-cut-${Date.now()}.html`);
+  await fs.writeFile(tmpFile, markup, 'utf8');
+
+  const win = new BrowserWindow({
+    show: false,
+    width: 900,
+    height: 1200,
+    webPreferences: { offscreen: false, sandbox: true },
+  });
+
+  try {
+    await win.loadFile(tmpFile);
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    const printed = await new Promise((resolve) => {
+      win.webContents.print({ silent: false, printBackground: true }, (ok, reason) => resolve({ ok, reason }));
+    });
+    if (!printed.ok) {
+      return { success: false, error: `Печать отменена или не удалась: ${printed.reason || ''}`.trim() };
+    }
+    return { success: true, printedTitle: String(title || '') };
+  } finally {
+    if (!win.isDestroyed()) win.destroy();
+    fs.unlink(tmpFile).catch(() => {});
+  }
+}
+
 /** Печатает документ Word/PDF системным обработчиком (глагол Print). */
 async function printWithShell(filePath) {
   const escaped = filePath.replace(/'/g, "''");
@@ -478,6 +509,7 @@ ipcMain.handle('complete-order', async (_event, data) => { try { return await co
 ipcMain.handle('save-paper-qty', async (_event, data) => { try { return await savePaperQty(data || {}); } catch (error) { return { success: false, error: error.message }; } });
 ipcMain.handle('set-order-status', async (_event, data) => { try { return await setOrderStatus(data || {}); } catch (error) { return { success: false, error: error.message }; } });
 ipcMain.handle('print-order-document', async (_event, data) => { try { return await printOrderDocument(data || {}); } catch (error) { return { success: false, error: error.message }; } });
+ipcMain.handle('print-cut-layout', async (_event, data) => { try { return await printCutLayout(data || {}); } catch (error) { return { success: false, error: error.message }; } });
 ipcMain.handle('open-folder', async (_event, folderPath) => {
   try {
     const target = String(folderPath || '').trim();

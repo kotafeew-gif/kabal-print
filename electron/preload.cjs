@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld('kabalAPI', {
   setOrderStatus: (data) => ipcRenderer.invoke('set-order-status', data),
   openFolder: (folderPath) => ipcRenderer.invoke('open-folder', folderPath),
   printOrderDocument: (data) => ipcRenderer.invoke('print-order-document', data),
+  printCutLayout: (data) => ipcRenderer.invoke('print-cut-layout', data),
   getUpdateState: () => ipcRenderer.invoke('get-update-state'),
   checkUpdates: () => ipcRenderer.invoke('check-updates'),
   downloadUpdate: () => ipcRenderer.invoke('download-update'),
