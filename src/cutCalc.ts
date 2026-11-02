@@ -133,6 +133,9 @@ function packColumns(
     }
 
     if (!target) {
+      // В новую колонку изделие обязано влезть по высоте: иначе оно уедет
+      // за край листа (баг: на 330×260 «вставал» A4 высотой 297).
+      if (item.h > areaH + EPS) return null;
       if (nextX + item.w > areaW + EPS) return null;
       target = { x: nextX, w: item.w, y: 0 };
       cols.push(target);

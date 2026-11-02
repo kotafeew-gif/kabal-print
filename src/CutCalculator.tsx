@@ -17,6 +17,7 @@ import {
   type CutPlan,
   type SheetSpec,
 } from './cutCalc';
+import { BIG_SHEETS, MACHINES, machineMaxLength, optimizeSheets, piecesFromBig } from './sheetOptimizer';
 import type { ParsedTz } from './parseTz';
 
 /** Цвета видов изделий — по кругу, различимы на печати. */
@@ -73,22 +74,55 @@ interface SheetSettings {
   h: number;
   gap: number;
   margin: number;
+  /** Большой лист, из которого режем (подбор оптимального размера) */
+  bigId: string;
+  /** Машина: её лимиты по ширине и длине листа */
+  machineId: string;
+  /** Дуплекс (4+4) — короткий лимит длины, симплекс — длинный */
+  duplex: boolean;
+  /** Максимальная ширина листа (можно подправить вручную) */
+  maxWidth: number;
+  /** Максимальная длина листа (по машине и режиму, правится вручную) */
+  maxLength: number;
 }
 
 const SHEET_STORAGE_KEY = 'kabal-cut-sheet';
 
+const DEFAULT_MACHINE = MACHINES[0];
+
 function loadSheetSettings(): SheetSettings {
-  const fallback: SheetSettings = { presetId: 'sra3', w: 320, h: 450, gap: 3, margin: 0 };
+  const fallback: SheetSettings = {
+    presetId: 'sra3',
+    w: 320,
+    h: 450,
+    gap: 3,
+    margin: 0,
+    bigId: '650x940',
+    machineId: DEFAULT_MACHINE.id,
+    duplex: true,
+    maxWidth: DEFAULT_MACHINE.maxWidth,
+    maxLength: DEFAULT_MACHINE.duplexLength,
+  };
   try {
     const raw = localStorage.getItem(SHEET_STORAGE_KEY);
     if (!raw) return fallback;
     const saved = JSON.parse(raw) as Partial<SheetSettings>;
+    const machine = MACHINES.find((m) => m.id === saved.machineId) || DEFAULT_MACHINE;
+    const duplex = saved.duplex !== false;
     return {
       presetId: typeof saved.presetId === 'string' ? saved.presetId : fallback.presetId,
       w: Number(saved.w) > 0 ? Number(saved.w) : fallback.w,
       h: Number(saved.h) > 0 ? Number(saved.h) : fallback.h,
       gap: Number(saved.gap) >= 0 ? Number(saved.gap) : fallback.gap,
       margin: Number(saved.margin) >= 0 ? Number(saved.margin) : fallback.margin,
+      bigId:
+        typeof saved.bigId === 'string' && BIG_SHEETS.some((b) => b.id === saved.bigId)
+          ? saved.bigId
+          : fallback.bigId,
+      machineId: machine.id,
+      duplex,
+      maxWidth: Number(saved.maxWidth) > 0 ? Number(saved.maxWidth) : machine.maxWidth,
+      maxLength: Number(saved.maxLength) > 0 ? Number(saved.maxLength) : machineMaxLength(machine, duplex),
     };
   } catch {
     return fallback;
@@ -193,20 +227,114 @@ export default function CutCalculator({ orderNumber, client, tz, parsed, onWrite
   const [notice, setNotice] = useState('');
   const [isPrinting, setIsPrinting] = useState(false);
 
+  // Подбор листа из большого: лимиты машины и ламинация берутся из заявки.
+  const [bigId, setBigId] = useState(initialSheet.bigId);
+  const [machineId, setMachineId] = useState(initialSheet.machineId);
+  const [duplex, setDuplex] = useState(initialSheet.duplex);
+  const [maxWidth, setMaxWidth] = useState(initialSheet.maxWidth);
+  const [maxLength, setMaxLength] = useState(initialSheet.maxLength);
+  const [lamination, setLamination] = useState(!!parsed.hasLamination);
+  const [minWidth, setMinWidth] = useState(parsed.hasLamination ? 320 : 0);
+
+  const machine = useMemo(
+    () => MACHINES.find((m) => m.id === machineId) || MACHINES[0],
+    [machineId],
+  );
+
   useEffect(() => {
     try {
       localStorage.setItem(
         SHEET_STORAGE_KEY,
-        JSON.stringify({ presetId, w: sheetW, h: sheetH, gap, margin }),
+        JSON.stringify({ presetId, w: sheetW, h: sheetH, gap, margin, bigId, machineId, duplex, maxWidth, maxLength }),
       );
     } catch {
       /* приватный режим — не критично */
     }
-  }, [presetId, sheetW, sheetH, gap, margin]);
+  }, [presetId, sheetW, sheetH, gap, margin, bigId, machineId, duplex, maxWidth, maxLength]);
 
   const sheet: SheetSpec = { w: sheetW, h: sheetH, gap, margin };
   const plan = useMemo(() => computeCut(sheet, formats), [sheetW, sheetH, gap, margin, formats]);
   const svg = useMemo(() => buildLayoutSvg(plan, sheet, formats), [plan, sheetW, sheetH, margin, formats]);
+
+  const bigSheet = useMemo(
+    () => BIG_SHEETS.find((b) => b.id === bigId) || BIG_SHEETS[0],
+    [bigId],
+  );
+  const opt = useMemo(
+    () =>
+      optimizeSheets(bigSheet, formats, {
+        gap,
+        margin,
+        maxWidth,
+        maxLength,
+        minWidth,
+        // Текущий лист задаёт, сколько прогонов уже приемлемо.
+        maxPasses: plan.sheets,
+      }),
+    [bigSheet, formats, gap, margin, maxWidth, maxLength, minWidth, plan.sheets],
+  );
+  // Сравнение с текущим листом: сколько тех же листов выходит с одного большого.
+  const currentPieces = piecesFromBig(bigSheet, sheetW, sheetH);
+  const currentBigSheets =
+    currentPieces > 0 && plan.sheets > 0 ? Math.ceil(plan.sheets / currentPieces) : 0;
+  const best = opt.best;
+  // Текущий лист может не проходить по лимитам машины (например, после смены
+  // заявки на ламинированную или на другой машине): тогда сравнивать с ним нельзя.
+  const currentValid =
+    currentPieces > 0 &&
+    sheetW >= minWidth &&
+    sheetW <= maxWidth &&
+    sheetH <= maxLength;
+  const savingPct =
+    best && currentBigSheets > 0 && best.bigSheets > 0 && best.bigSheets < currentBigSheets
+      ? Math.round((1 - best.bigSheets / currentBigSheets) * 100)
+      : 0;
+  // В таблицу — только РАЗНЫЕ варианты по бумаге: у одного и того же расхода
+  // листов показываем самый практичный (меньше прогонов), а не десяток полос.
+  const optRows = useMemo(() => {
+    const seen = new Set<string>();
+    const rows: typeof opt.candidates = [];
+    const paperCap = best && best.bigSheets > 0 ? best.bigSheets * 1.5 : 0;
+    for (const c of opt.candidates) {
+      // Совсем невыгодные по бумаге варианты в таблицу не тащим — они только
+      // мешают выбрать. Помеченные «много прогонов» оставляем: это цена экономии.
+      if (paperCap > 0 && c.bigSheets > paperCap && !c.overPasses) continue;
+      const key = `${c.bigSheets}|${c.efficiency}|${c.overPasses}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      rows.push(c);
+      if (rows.length === 6) break;
+    }
+    return rows;
+  }, [opt.candidates, best]);
+  const isCurrentBest = !!best && best.w === sheetW && best.h === sheetH;
+  // Текст сравнения: без «улучшения» там, где текущий лист и так не хуже.
+  const optNote = (() => {
+    if (!best) return '';
+    const rec =
+      `${best.w}×${best.h} — ${best.piecesPerBig} шт с большого` +
+      (best.bigSheets ? `, ${best.bigSheets} больших листов на тираж` : '');
+    if (isCurrentBest) {
+      return `Текущий лист ${sheetW}×${sheetH} и есть оптимальный: ${rec}.`;
+    }
+    if (!currentValid) {
+      return (
+        `Текущий лист ${sheetW}×${sheetH} не проходит по лимитам машины: ` +
+        `${minWidth ? `${minWidth}–${maxWidth}` : `до ${maxWidth}`} мм по ширине, ` +
+        `до ${maxLength} мм по длине. Оптимально: ${rec}.`
+      );
+    }
+    if (best.bigSheets >= currentBigSheets) {
+      return (
+        `Текущий лист ${sheetW}×${sheetH} не хуже оптимального: ${currentPieces} шт с большого, ` +
+        `${currentBigSheets} больших листов. Лучший вариант: ${rec}.`
+      );
+    }
+    return (
+      `Сейчас ${sheetW}×${sheetH}: ${currentPieces} шт с большого, ${currentBigSheets} больших листов. ` +
+      `Оптимально: ${rec} — экономия ${savingPct}%.`
+    );
+  })();
 
   // Запоминаем посчитанное число листов: «Раскрой» берёт его как тираж,
   // чтобы не считать заново и не подставлять тираж заказа вместо листов.
@@ -221,6 +349,14 @@ export default function CutCalculator({ orderNumber, client, tz, parsed, onWrite
       setSheetW(preset.w);
       setSheetH(preset.h);
     }
+  }
+
+  /** Взять подобранный размер как текущий печатный лист. */
+  function applySize(w: number, h: number) {
+    setPresetId('custom');
+    setSheetW(w);
+    setSheetH(h);
+    setNotice('');
   }
 
   function updateFormat(idx: number, patch: Partial<CutFormat>) {
@@ -411,6 +547,166 @@ export default function CutCalculator({ orderNumber, client, tz, parsed, onWrite
               иначе листов выйдет втрое больше, чем нужно.
             </p>
           </div>
+          </div>
+
+          {/* Подбор листа из большого: какой размер резать, чтобы бумаги ушло меньше */}
+          <div className="cut-section cut-optimizer">
+            <div className="cut-section-head">
+              <h3>Оптимальный лист из большого</h3>
+              {best && (
+                <button className="btn-add-paper" onClick={() => applySize(best.w, best.h)}>
+                  Взять {best.w}×{best.h}
+                </button>
+              )}
+            </div>
+
+            <div className="cut-sheet-row">
+              <label className="cut-field">
+                <span>Большой лист</span>
+                <select value={bigId} onChange={(e) => setBigId(e.target.value)}>
+                  {BIG_SHEETS.map((b) => (
+                    <option key={b.id} value={b.id}>{b.label}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="cut-field">
+                <span>Машина</span>
+                <select
+                  value={machineId}
+                  onChange={(e) => {
+                    const next = MACHINES.find((m) => m.id === e.target.value) || MACHINES[0];
+                    setMachineId(next.id);
+                    setMaxWidth(next.maxWidth);
+                    setMaxLength(machineMaxLength(next, duplex));
+                  }}
+                >
+                  {MACHINES.map((m) => (
+                    <option key={m.id} value={m.id}>{m.label}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="cut-field">
+                <span>Режим</span>
+                <select
+                  value={duplex ? 'duplex' : 'simplex'}
+                  onChange={(e) => {
+                    const on = e.target.value === 'duplex';
+                    setDuplex(on);
+                    setMaxLength(machineMaxLength(machine, on));
+                  }}
+                >
+                  <option value="duplex">
+                    Дуплекс · до {machine.duplexLength} мм
+                  </option>
+                  <option value="simplex">
+                    Симплекс · до {machine.simplexLength} мм
+                  </option>
+                </select>
+              </label>
+              <label className="cut-field cut-field-sm">
+                <span>Макс. ширина, мм</span>
+                <input
+                  type="number"
+                  min={1}
+                  value={maxWidth}
+                  onChange={(e) => setMaxWidth(num(e.target.value))}
+                />
+              </label>
+              <label className="cut-field cut-field-sm">
+                <span>Макс. длина, мм</span>
+                <input
+                  type="number"
+                  min={1}
+                  value={maxLength}
+                  onChange={(e) => setMaxLength(num(e.target.value))}
+                />
+              </label>
+              <label className="cut-field cut-field-sm">
+                <span>Мин. ширина, мм</span>
+                <input
+                  type="number"
+                  min={0}
+                  value={minWidth}
+                  onChange={(e) => setMinWidth(num(e.target.value))}
+                />
+              </label>
+              <label className="cut-opt-check">
+                <input
+                  type="checkbox"
+                  checked={lamination}
+                  onChange={(e) => {
+                    const on = e.target.checked;
+                    setLamination(on);
+                    setMinWidth(on ? 320 : 0);
+                  }}
+                />
+                <span>ламинация — лист не уже 320 мм</span>
+              </label>
+            </div>
+
+            {best ? (
+              <>
+                <p className="cut-opt-note">{optNote}</p>
+
+                <table className="cut-opt-table">
+                  <thead>
+                    <tr>
+                      <th>Лист, мм</th>
+                      <th>Полос × рядов</th>
+                      <th>С большого</th>
+                      <th>На листе</th>
+                      <th>Листов</th>
+                      <th>Больших</th>
+                      <th>КПД</th>
+                      <th />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {optRows.map((c) => (
+                      <tr
+                        key={`${c.w}x${c.h}`}
+                        className={c === best ? 'best' : c.overPasses ? 'over' : undefined}
+                        title={c.overPasses ? 'Больше прогонов, чем на текущем листе — не рекомендуем' : undefined}
+                      >
+                        <td><b>{c.w}×{c.h}</b></td>
+                        <td>{c.strips}×{c.rows}</td>
+                        <td>{c.piecesPerBig}</td>
+                        <td>{c.plan.layout.placements.length}</td>
+                        <td>{c.sheets || '—'}</td>
+                        <td>{c.bigSheets || '—'}</td>
+                        <td>{c.efficiency}%</td>
+                        <td>
+                          <button className="cut-opt-apply" onClick={() => applySize(c.w, c.h)}>
+                            Взять
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+
+                <p className="cut-hint">
+                  Большой лист режется на полосы не шире {maxWidth} мм, полоса — на листы не длиннее{' '}
+                  {maxLength} мм ({machine.label}
+                  {machine.duplexLength === machine.simplexLength
+                    ? ''
+                    : duplex
+                      ? ', дуплекс'
+                      : ', симплекс'}
+                  ); остаток полосы уходит в отход. «Листов» — сколько промежуточных листов нужно
+                  на тираж (это же число прогонов), «Больших» — сколько для этого купить больших
+                  листов. Серым помечены варианты, которые гоняют машину дольше текущего листа:
+                  бумаги меньше, а времени больше.
+                  {opt.problems.length > 0 && ` ${opt.problems.join(' ')}`}
+                </p>
+              </>
+            ) : (
+              <p className="cut-hint">
+                {opt.problems.length > 0
+                  ? opt.problems.join(' ')
+                  : 'Укажите размер изделия и тираж — программа подберёт, какой лист вырезать из большого.'}
+              </p>
+            )}
           </div>
 
           {/* Предпросмотр + итог */}

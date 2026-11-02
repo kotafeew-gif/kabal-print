@@ -3277,6 +3277,94 @@ body {
   line-height: 1.4;
 }
 
+/* Подбор листа из большого — блок во всю ширину окна «Предрасчёт» */
+.cut-optimizer {
+  grid-column: 1 / -1;
+}
+
+.cut-opt-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #475569;
+  padding-bottom: 6px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.cut-opt-check input {
+  width: 14px;
+  height: 14px;
+  cursor: pointer;
+  accent-color: #059669;
+}
+
+.cut-opt-note {
+  margin: 10px 0 0;
+  font-size: 12.5px;
+  color: #334155;
+  line-height: 1.45;
+}
+
+.cut-opt-note b {
+  color: #047857;
+}
+
+.cut-opt-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 8px;
+  font-size: 12.5px;
+}
+
+.cut-opt-table th {
+  text-align: left;
+  font-size: 11px;
+  font-weight: 600;
+  color: #64748b;
+  padding: 4px 6px;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.cut-opt-table td {
+  padding: 5px 6px;
+  border-bottom: 1px solid #eef2f7;
+  color: #0f172a;
+}
+
+.cut-opt-table tr.best td {
+  background: #ecfdf5;
+}
+
+.cut-opt-table tr.over td {
+  color: #94a3b8;
+}
+
+.cut-opt-table th:last-child,
+.cut-opt-table td:last-child {
+  width: 62px;
+  text-align: right;
+}
+
+.cut-opt-apply {
+  border: 1px solid #10b981;
+  background: #ffffff;
+  color: #047857;
+  border-radius: 6px;
+  padding: 3px 9px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+.cut-opt-apply:hover {
+  background: #10b981;
+  color: #ffffff;
+}
+
 .cut-result {
   display: flex;
   flex-direction: column;
