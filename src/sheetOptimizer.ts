@@ -78,9 +78,11 @@ export interface OptimizeOptions {
   /** Минимальная ширина листа (ламинация — 320), мм */
   minWidth: number;
   /**
-   * Ширины плёнки для ламинации (320, 330, 470). Если заданы — ширина листа
-   * должна совпадать с одной из них: плёнку не растянуть, лист 325 при плёнке
-   * 320/330 только добавляет отход. Пустой массив — не ограничивать.
+   * Ширины плёнки в наличии (320, 330, 470). Плёнка НЕ шире листа — свисать
+   * ей нельзя, поэтому лист 325 плёнкой 330 не ламинируют. Плёнку кладут по
+   * любой стороне листа: 325×470 идёт плёнкой 470 по длинной стороне (470 = 470),
+   * 330×470 — плёнкой 330 по ширине. Условие: какая-то плёнка не шире большей
+   * стороны листа. Пустой массив — ламинацию не проверять.
    */
   filmWidths: number[];
   /**
@@ -116,6 +118,8 @@ export interface SheetCandidate {
   leftoverH: number;
   /** Вариант требует больше прогонов, чем текущий лист */
   overPasses: boolean;
+  /** Лист ложится в плёнку ровно (по ширине или по длине) — меньше отход плёнки */
+  filmMatch: boolean;
 }
 
 export interface OptimizeResult {
@@ -135,6 +139,25 @@ interface SizeGuess {
 }
 
 /**
+ * Можно ли ламинировать лист. Плёнка кладётся по любой стороне листа, но она
+ * НЕ должна свисать с него — только лечь целиком. Значит нужна плёнка не шире
+ * большей стороны листа: 325×470 → плёнка 470 по длинной стороне, 330×470 →
+ * плёнка 330 по ширине. Лист 325 плёнкой 330 не ламинируют (плёнка шире листа),
+ * а лист 325×235 не ламинируют вообще — плёнки 320 больше любой его стороны.
+ */
+export function fitsFilm(w: number, h: number, films: number[]): boolean {
+  if (!films.length) return true;
+  const longestSide = Math.max(w, h);
+  return films.some((f) => f <= longestSide);
+}
+
+/** Лист ложится в плёнку ровно — по ширине или по длине (без обрезки плёнки). */
+export function isFilmMatch(w: number, h: number, films: number[]): boolean {
+  if (!films.length) return false;
+  return films.some((f) => Math.abs(f - w) < 0.5 || Math.abs(f - h) < 0.5);
+}
+
+/**
  * Кандидаты размеров промежуточного листа для одного положения большого листа.
  * Ширина полосы — min(maxWidth, floor(bigW / n)), длина листа — floor(bigH / m).
  * Лист длиннее машины (maxLength) не рассматривается вовсе: его не протянуть.
@@ -144,22 +167,11 @@ function sizeCandidates(big: { w: number; h: number }, opts: OptimizeOptions, mi
   const maxW = Math.max(minW, opts.maxWidth);
   const maxH = Math.max(0, opts.maxLength);
 
-  // При ламинации ширина листа — только ширина плёнки: 325 при плёнке 320/330
-  // означает лишний отход, а «дотянуть» плёнку нельзя.
-  const filmSet = opts.filmWidths || [];
-  const films = filmSet.filter((w) => w >= minW && w <= maxW);
-
   const widths: number[] = [];
-  if (filmSet.length) {
-    // Плёнка задана — других ширин не предлагаем, даже если ни одна не подошла
-    // (тогда кандидатов нет и выводится объяснение).
-    for (const w of films) if (!widths.includes(w)) widths.push(w);
-  } else {
-    for (let n = 1; n <= 200; n++) {
-      const w = Math.min(maxW, Math.floor(big.w / n));
-      if (w < minW) break;
-      if (!widths.includes(w)) widths.push(w);
-    }
+  for (let n = 1; n <= 200; n++) {
+    const w = Math.min(maxW, Math.floor(big.w / n));
+    if (w < minW) break;
+    if (!widths.includes(w)) widths.push(w);
   }
 
   const heights: number[] = [];
@@ -241,11 +253,14 @@ export function optimizeSheets(
     if (!plan.layout.placements.length) continue;
     // Годен только лист, на который влезает КАЖДЫЙ вид: иначе заказ не напечатать.
     if (!active.every((f) => (plan.layout.counts[f.id] || 0) > 0)) continue;
+    // С ламинацией лист обязан пролезть в какую-нибудь плёнку.
+    if (!fitsFilm(guess.w, guess.h, opts.filmWidths || [])) continue;
 
     const piecesPerBig = Math.max(1, guess.strips * guess.rows);
     const bigSheets = totalQty > 0 ? Math.ceil(plan.sheets / piecesPerBig) : 0;
     const productsPerBig = plan.layout.placements.length * piecesPerBig;
     const overPasses = opts.maxPasses > 0 && plan.sheets > opts.maxPasses;
+    const filmMatch = isFilmMatch(guess.w, guess.h, opts.filmWidths || []);
     const efficiency =
       totalQty > 0 && bigSheets > 0
         ? Math.round((usefulArea / (bigSheets * bigArea)) * 1000) / 10
@@ -265,12 +280,13 @@ export function optimizeSheets(
       leftoverW: guess.leftoverW,
       leftoverH: guess.leftoverH,
       overPasses,
+      filmMatch,
     });
   }
 
   if (!candidates.length) {
     const films = opts.filmWidths?.length
-      ? ` Ширина листа должна совпадать с плёнкой (${opts.filmWidths.join('/')} мм) и быть не шире ${opts.maxWidth} мм.`
+      ? ` Ламинация: нужна плёнка не шире большей стороны листа (${opts.filmWidths.join('/')} мм).`
       : '';
     problems.push(
       `Ни один лист не подошёл: ${opts.minWidth > 0 ? `${opts.minWidth}–${opts.maxWidth}` : `до ${opts.maxWidth}`} мм по ширине, ` +
@@ -289,8 +305,10 @@ export function optimizeSheets(
       if (Math.abs(a.efficiency - b.efficiency) > 0.05) return b.efficiency - a.efficiency;
       // Бумаги поровну — меньше прогонов.
       if (a.sheets !== b.sheets) return a.sheets - b.sheets;
-      // Прогонов тоже поровну — больше листов с большого: тот же расход бумаги,
-      // но остаток листов уходит в дело (330×470 даёт 2 листа, 320×470 — 4).
+      // Прогонов тоже поровну — лист, который ложится в плёнку ровно:
+      // при ламинации это меньше отхода плёнки и быстрее.
+      if (a.filmMatch !== b.filmMatch) return a.filmMatch ? -1 : 1;
+      // Иначе больше листов с большого: тот же расход бумаги, но остаток идёт в дело.
       if (a.piecesPerBig !== b.piecesPerBig) return b.piecesPerBig - a.piecesPerBig;
       return b.productsPerBig - a.productsPerBig;
     }

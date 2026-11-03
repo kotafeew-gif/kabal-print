@@ -87,7 +87,7 @@ interface SheetSettings {
   maxWidth: number;
   /** Максимальная длина листа (по машине и режиму, правится вручную) */
   maxLength: number;
-  /** Какие ширины плёнки есть в наличии (при ламинации ширина листа — из них) */
+  /** Какие ширины плёнки есть в наличии (плёнка не шире листа) */
   films: number[];
 }
 
@@ -141,6 +141,16 @@ function loadSheetSettings(): SheetSettings {
 
 const esc = (s: string): string =>
   String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string));
+
+/** «1 большой лист», «2 больших листа», «5 больших листов». */
+function sheetsWord(n: number): string {
+  const abs = Math.abs(n) % 100;
+  const last = abs % 10;
+  if (abs > 10 && abs < 20) return 'больших листов';
+  if (last === 1) return 'большой лист';
+  if (last >= 2 && last <= 4) return 'больших листа';
+  return 'больших листов';
+}
 
 /** SVG раскладки строкой — один источник и для предпросмотра, и для печати. */
 export function buildLayoutSvg(plan: CutPlan, sheet: SheetSpec, formats: CutFormat[]): string {
@@ -245,7 +255,8 @@ export default function CutCalculator({ orderNumber, client, tz, parsed, onWrite
   const [maxLength, setMaxLength] = useState(initialSheet.maxLength);
   const [lamination, setLamination] = useState(!!parsed.hasLamination);
   const [films, setFilms] = useState<number[]>(initialSheet.films);
-  const [minWidth, setMinWidth] = useState(0);
+  // 320 — нижняя граница для ламинированного листа, а не цель: 325 тоже годится.
+  const [minWidth, setMinWidth] = useState(parsed.hasLamination ? 320 : 0);
 
   const machine = useMemo(
     () => MACHINES.find((m) => m.id === machineId) || MACHINES[0],
@@ -279,7 +290,7 @@ export default function CutCalculator({ orderNumber, client, tz, parsed, onWrite
         maxWidth,
         maxLength,
         minWidth,
-        // С ламинацией ширина листа — только ширина плёнки (320/330/470).
+        // С ламинацией лист должен уложиться в плёнку целиком (не шире листа).
         filmWidths: lamination ? films : [],
         // Текущий лист задаёт, сколько прогонов уже приемлемо.
         maxPasses: plan.sheets,
@@ -293,7 +304,7 @@ export default function CutCalculator({ orderNumber, client, tz, parsed, onWrite
   const best = opt.best;
   // Текущий лист может не проходить по лимитам машины (например, после смены
   // заявки на ламинированную или на другой машине): тогда сравнивать с ним нельзя.
-  const widthAllowed = lamination ? films.includes(sheetW) : sheetW >= minWidth;
+  const widthAllowed = sheetW >= minWidth;
   const currentValid =
     currentPieces > 0 && widthAllowed && sheetW <= maxWidth && sheetH <= maxLength;
   const savingPct =
@@ -324,29 +335,25 @@ export default function CutCalculator({ orderNumber, client, tz, parsed, onWrite
     if (!best) return '';
     const rec =
       `${best.w}×${best.h} — ${best.piecesPerBig} шт с большого` +
-      (best.bigSheets ? `, ${best.bigSheets} больших листов на тираж` : '');
+      (best.bigSheets ? `, ${best.bigSheets} ${sheetsWord(best.bigSheets)} на тираж` : '');
     if (isCurrentBest) {
       return `Текущий лист ${sheetW}×${sheetH} и есть оптимальный: ${rec}.`;
     }
     if (!currentValid) {
-      // В правиле показываем только плёнку, которая пролезает в машину:
-      // 470 при макс. ширине 330 — это шум, а не подсказка.
-      const usableFilms = films.filter((w) => w <= maxWidth);
       const rule = lamination
-        ? usableFilms.length
-          ? `ширина листа должна совпадать с плёнкой (${usableFilms.join(' / ')} мм), длина до ${maxLength} мм`
-          : `ни одна плёнка не проходит по ширине машины (до ${maxWidth} мм)`
+        ? `лист не уже ${minWidth} мм и не длиннее ${maxLength} мм`
         : `${minWidth ? `${minWidth}–${maxWidth}` : `до ${maxWidth}`} мм по ширине, до ${maxLength} мм по длине`;
       return `Текущий лист ${sheetW}×${sheetH} не проходит по лимитам: ${rule}. Оптимально: ${rec}.`;
     }
     if (best.bigSheets >= currentBigSheets) {
       return (
         `Текущий лист ${sheetW}×${sheetH} не хуже оптимального: ${currentPieces} шт с большого, ` +
-        `${currentBigSheets} больших листов. Лучший вариант: ${rec}.`
+        `${currentBigSheets} ${sheetsWord(currentBigSheets)}. Лучший вариант: ${rec}.`
       );
     }
     return (
-      `Сейчас ${sheetW}×${sheetH}: ${currentPieces} шт с большого, ${currentBigSheets} больших листов. ` +
+      `Сейчас ${sheetW}×${sheetH}: ${currentPieces} шт с большого, ` +
+      `${currentBigSheets} ${sheetsWord(currentBigSheets)}. ` +
       `Оптимально: ${rec} — экономия ${savingPct}%.`
     );
   })();
@@ -636,22 +643,25 @@ export default function CutCalculator({ orderNumber, client, tz, parsed, onWrite
                   onChange={(e) => setMaxLength(num(e.target.value))}
                 />
               </label>
-              {!lamination && (
-                <label className="cut-field cut-field-sm">
-                  <span>Мин. ширина, мм</span>
-                  <input
-                    type="number"
-                    min={0}
-                    value={minWidth}
-                    onChange={(e) => setMinWidth(num(e.target.value))}
-                  />
-                </label>
-              )}
+              <label className="cut-field cut-field-sm">
+                <span>Мин. ширина, мм</span>
+                <input
+                  type="number"
+                  min={0}
+                  value={minWidth}
+                  onChange={(e) => setMinWidth(num(e.target.value))}
+                />
+              </label>
               <label className="cut-opt-check">
                 <input
                   type="checkbox"
                   checked={lamination}
-                  onChange={(e) => setLamination(e.target.checked)}
+                  onChange={(e) => {
+                    const on = e.target.checked;
+                    setLamination(on);
+                    // 320 — нижняя граница для ламинированного листа.
+                    if (on && minWidth < 320) setMinWidth(320);
+                  }}
                 />
                 <span>ламинация</span>
               </label>
@@ -660,13 +670,12 @@ export default function CutCalculator({ orderNumber, client, tz, parsed, onWrite
                   <span className="cut-opt-films-label">Плёнка, мм</span>
                   {FILM_WIDTHS.map((w) => {
                     const on = films.includes(w);
-                    const tooWide = w > maxWidth;
                     return (
                       <button
                         key={w}
                         type="button"
-                        className={`cut-film ${on ? 'on' : ''} ${tooWide ? 'off' : ''}`}
-                        title={tooWide ? `Плёнка ${w} мм шире машины (${maxWidth} мм)` : `Лист шириной ${w} мм`}
+                        className={`cut-film ${on ? 'on' : ''}`}
+                        title={on ? `Плёнка ${w} мм есть в наличии` : `Плёнки ${w} мм нет`}
                         onClick={() =>
                           setFilms((prev) =>
                             prev.includes(w) ? prev.filter((x) => x !== w) : [...prev, w].sort((a, b) => a - b),
@@ -711,7 +720,14 @@ export default function CutCalculator({ orderNumber, client, tz, parsed, onWrite
                         <td>{c.plan.layout.placements.length}</td>
                         <td>{c.sheets || '—'}</td>
                         <td>{c.bigSheets || '—'}</td>
-                        <td>{c.efficiency}%</td>
+                        <td>
+                          {c.efficiency}%
+                          {lamination && c.filmMatch && (
+                            <span className="cut-film-badge" title="Лист ложится в плёнку ровно">
+                              плёнка
+                            </span>
+                          )}
+                        </td>
                         <td>
                           <button className="cut-opt-apply" onClick={() => applySize(c.w, c.h)}>
                             Взять
@@ -732,10 +748,10 @@ export default function CutCalculator({ orderNumber, client, tz, parsed, onWrite
                       : ', симплекс'}
                   ); остаток полосы уходит в отход.
                   {lamination
-                    ? ' С ламинацией ширина листа — только ширина плёнки: 325 при плёнке 320/330 даёт лишний отход.'
+                    ? ' Плёнка ложится на лист целиком, свисать ей нельзя: 325×470 ламинируют плёнкой 470 по длинной стороне, 330×470 — плёнкой 330 по ширине. Лист не уже 320 мм.'
                     : ''}{' '}
                   «Листов» — сколько промежуточных листов нужно на тираж (это же число прогонов),
-                  «Больших» — сколько для этого купить больших листов. Серым помечены варианты,
+                  «Больших» — сколько больших листов уйдёт на тираж. Серым помечены варианты,
                   которые гоняют машину дольше текущего листа: бумаги меньше, а времени больше.
                   {opt.problems.length > 0 && ` ${opt.problems.join(' ')}`}
                 </p>
