@@ -78,6 +78,12 @@ export interface OptimizeOptions {
   /** Минимальная ширина листа (ламинация — 320), мм */
   minWidth: number;
   /**
+   * Ширины плёнки для ламинации (320, 330, 470). Если заданы — ширина листа
+   * должна совпадать с одной из них: плёнку не растянуть, лист 325 при плёнке
+   * 320/330 только добавляет отход. Пустой массив — не ограничивать.
+   */
+  filmWidths: number[];
+  /**
    * Сколько прогонов сейчас (листов на текущем листе). Вариант, который гонит
    * машину дольше, чем сейчас, не рекомендуем: экономия бумаги не стоит
    * вчетверо большего времени печати. 0 — не ограничивать.
@@ -138,11 +144,22 @@ function sizeCandidates(big: { w: number; h: number }, opts: OptimizeOptions, mi
   const maxW = Math.max(minW, opts.maxWidth);
   const maxH = Math.max(0, opts.maxLength);
 
+  // При ламинации ширина листа — только ширина плёнки: 325 при плёнке 320/330
+  // означает лишний отход, а «дотянуть» плёнку нельзя.
+  const filmSet = opts.filmWidths || [];
+  const films = filmSet.filter((w) => w >= minW && w <= maxW);
+
   const widths: number[] = [];
-  for (let n = 1; n <= 200; n++) {
-    const w = Math.min(maxW, Math.floor(big.w / n));
-    if (w < minW) break;
-    if (!widths.includes(w)) widths.push(w);
+  if (filmSet.length) {
+    // Плёнка задана — других ширин не предлагаем, даже если ни одна не подошла
+    // (тогда кандидатов нет и выводится объяснение).
+    for (const w of films) if (!widths.includes(w)) widths.push(w);
+  } else {
+    for (let n = 1; n <= 200; n++) {
+      const w = Math.min(maxW, Math.floor(big.w / n));
+      if (w < minW) break;
+      if (!widths.includes(w)) widths.push(w);
+    }
   }
 
   const heights: number[] = [];
@@ -252,9 +269,13 @@ export function optimizeSheets(
   }
 
   if (!candidates.length) {
+    const films = opts.filmWidths?.length
+      ? ` Ширина листа должна совпадать с плёнкой (${opts.filmWidths.join('/')} мм) и быть не шире ${opts.maxWidth} мм.`
+      : '';
     problems.push(
-      `Ни один лист не подошёл: при ширине ${opts.minWidth}–${opts.maxWidth} мм и длине ` +
-        `до ${opts.maxLength} мм изделие ${active.map((f) => `${f.w}×${f.h}`).join(', ')} мм не влезает`,
+      `Ни один лист не подошёл: ${opts.minWidth > 0 ? `${opts.minWidth}–${opts.maxWidth}` : `до ${opts.maxWidth}`} мм по ширине, ` +
+        `до ${opts.maxLength} мм по длине — изделие ${active.map((f) => `${f.w}×${f.h}`).join(', ')} мм не влезает.` +
+        films,
     );
     return { candidates: [], best: null, problems };
   }
@@ -266,13 +287,16 @@ export function optimizeSheets(
       if (a.overPasses !== b.overPasses) return a.overPasses ? 1 : -1;
       if (a.bigSheets !== b.bigSheets) return a.bigSheets - b.bigSheets;
       if (Math.abs(a.efficiency - b.efficiency) > 0.05) return b.efficiency - a.efficiency;
-      // Бумаги поровну — меньше прогонов: крупный лист вместо десятка полос.
-      if (a.piecesPerBig !== b.piecesPerBig) return a.piecesPerBig - b.piecesPerBig;
+      // Бумаги поровну — меньше прогонов.
+      if (a.sheets !== b.sheets) return a.sheets - b.sheets;
+      // Прогонов тоже поровну — больше листов с большого: тот же расход бумаги,
+      // но остаток листов уходит в дело (330×470 даёт 2 листа, 320×470 — 4).
+      if (a.piecesPerBig !== b.piecesPerBig) return b.piecesPerBig - a.piecesPerBig;
       return b.productsPerBig - a.productsPerBig;
     }
     // Без тиража сравнивать нечего — показываем, где больше изделий с большого листа.
     if (a.productsPerBig !== b.productsPerBig) return b.productsPerBig - a.productsPerBig;
-    if (a.piecesPerBig !== b.piecesPerBig) return a.piecesPerBig - b.piecesPerBig;
+    if (a.piecesPerBig !== b.piecesPerBig) return b.piecesPerBig - a.piecesPerBig;
     return a.plan.layout.wastePct - b.plan.layout.wastePct;
   });
 

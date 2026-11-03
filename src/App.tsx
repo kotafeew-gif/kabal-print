@@ -1579,9 +1579,11 @@ export default function App() {
               {(() => {
                 const q = tagSearch.trim().toLowerCase();
                 const groups = CATEGORY_ORDER.map((cat) => {
+                  // По алфавиту, а не по числу заявок: печатник ищет глазами
+                  // нужную операцию, а не самую частую.
                   const all = TAGS_BY_CATEGORY[cat]
                     .filter((t) => (tagCounts.get(t.id) || 0) > 0)
-                    .sort((a, b) => (tagCounts.get(b.id) || 0) - (tagCounts.get(a.id) || 0));
+                    .sort((a, b) => a.label.localeCompare(b.label, 'ru'));
                   const matched = q ? all.filter((t) => t.label.toLowerCase().includes(q)) : all;
                   return { cat, matched, total: all.length };
                 }).filter((g) => g.matched.length > 0);

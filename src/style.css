@@ -3301,6 +3301,42 @@ body {
   accent-color: #059669;
 }
 
+.cut-opt-films {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-bottom: 3px;
+}
+
+.cut-opt-films-label {
+  font-size: 11px;
+  color: #64748b;
+  font-weight: 600;
+}
+
+.cut-film {
+  border: 1px solid #cbd5e1;
+  background: #ffffff;
+  color: #94a3b8;
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+.cut-film.on {
+  background: #ecfdf5;
+  border-color: #10b981;
+  color: #047857;
+}
+
+.cut-film.off {
+  border-style: dashed;
+  opacity: 0.55;
+}
+
 .cut-opt-note {
   margin: 10px 0 0;
   font-size: 12.5px;
