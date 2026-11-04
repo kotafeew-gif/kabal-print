@@ -2014,11 +2014,21 @@ body {
   background: #ffffff;
   border-radius: 16px;
   width: min(840px, 100%);
+  max-width: calc(100vw - 16px);
   max-height: 90vh;
   display: flex;
   flex-direction: column;
   box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
   overflow: hidden;
+}
+
+/* Окно тащится за шапку: курсор-«рука» (ставится в правиле .modal-header) */
+.modal-dragging {
+  box-shadow: 0 28px 50px -12px rgba(15, 23, 42, 0.35);
+}
+
+.modal-dragging .modal-header {
+  cursor: grabbing;
 }
 
 .modal-header {
@@ -2027,6 +2037,10 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  /* Шапка — ручка перетаскивания окна; текст в ней не выделяем, иначе
+     протяжка мышью начинает выделение вместо перемещения */
+  cursor: grab;
+  user-select: none;
 }
 
 .modal-header h2 {
@@ -2434,6 +2448,12 @@ body {
 
 .kanban-card.claimed {
   border-left-color: var(--col-accent, #94a3b8);
+}
+
+/* Свободная заявка — зелёная полоса слева, как у свободной строки в таблице.
+   Занятая получает цвет печатника инлайном (style.borderLeftColor). */
+.kanban-card.free {
+  border-left-color: #22c55e;
 }
 
 .kanban-card.dragging {
@@ -4019,6 +4039,376 @@ body {
 .list-more {
   text-align: center;
   padding: 14px 12px 22px;
+  font-size: 12px;
+  color: #94a3b8;
+}
+
+/* ================= CALENDAR (вкладка «Календарь») ================= */
+.calendar-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.calendar-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 8px 12px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  font-size: 12.5px;
+  color: #475569;
+}
+
+.calendar-month-nav {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.calendar-month-title {
+  min-width: 132px;
+  text-align: center;
+  font-size: 15px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.calendar-nav-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #475569;
+  cursor: pointer;
+}
+
+.calendar-nav-btn:hover {
+  border-color: #94a3b8;
+  color: #0f172a;
+}
+
+.calendar-today-btn {
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #334155;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+
+.calendar-today-btn:hover {
+  background: #f1f5f9;
+}
+
+.calendar-legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  margin-left: auto;
+  font-size: 12px;
+  color: #64748b;
+}
+
+.calendar-legend-label {
+  color: #94a3b8;
+}
+
+.calendar-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.calendar-chip-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  border: 1px solid rgba(15, 23, 42, 0.18);
+  display: inline-block;
+}
+
+.calendar-summary {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 0 4px;
+  font-size: 12.5px;
+  color: #475569;
+}
+
+.calendar-summary strong {
+  color: #0f172a;
+}
+
+.calendar-nodeadline-btn {
+  border: 1px solid #fbbf24;
+  border-radius: 8px;
+  background: #fffbeb;
+  color: #92400e;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 3px 10px;
+  cursor: pointer;
+}
+
+.calendar-nodeadline-btn:hover {
+  background: #fef3c7;
+}
+
+.calendar-summary-hint {
+  margin-left: auto;
+  font-size: 11.5px;
+  color: #94a3b8;
+}
+
+.calendar-weekdays {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  padding: 0 2px;
+}
+
+.calendar-weekdays span {
+  padding: 4px 10px;
+  font-size: 11.5px;
+  font-weight: 700;
+  color: #64748b;
+}
+
+.calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 6px;
+}
+
+/* Каждая клетка — отдельный фрейм: своя рамка, закругление и зазор между днями.
+   Раньше это была одна сплошная сетка с линиями-разделителями, и месяц читался
+   как единый лист — границы дней терялись. */
+.calendar-cell {
+  min-height: 96px;
+  padding: 7px 9px 8px;
+  border: 1px solid #e2e8f0;
+  border-radius: 9px;
+  background: #ffffff;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  transition: border-color 0.15s ease, background-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.calendar-cell.outside {
+  background: #f8fafc;
+  border-color: #edf1f5;
+}
+
+.calendar-cell.outside .calendar-daynum {
+  color: #cbd5e1;
+}
+
+.calendar-cell.has-orders {
+  cursor: pointer;
+}
+
+.calendar-cell.has-orders:hover {
+  border-color: #bfdbfe;
+  background: #f6f9fd;
+  box-shadow: 0 2px 6px rgba(37, 99, 235, 0.08);
+}
+
+.calendar-cell.late {
+  background: #fffafa;
+  border-color: #fde2e2;
+}
+
+.calendar-cell.late:hover {
+  border-color: #fca5a5;
+}
+
+.calendar-cell.today {
+  background: #f2f7ff;
+  border-color: #2563eb;
+  box-shadow: 0 0 0 1px #2563eb;
+}
+
+.calendar-cell-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.calendar-daynum {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #64748b;
+  border-radius: 50%;
+}
+
+.calendar-cell.today .calendar-daynum {
+  background: #2563eb;
+  color: #ffffff;
+  font-weight: 700;
+}
+
+.calendar-cell-main {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.calendar-total {
+  font-size: 19px;
+  font-weight: 800;
+  color: #0f172a;
+  line-height: 1;
+}
+
+.calendar-chips {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.calendar-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #334155;
+}
+
+.calendar-chip i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1px solid rgba(15, 23, 42, 0.16);
+  display: inline-block;
+}
+
+.calendar-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+}
+
+.calendar-free {
+  color: #64748b;
+}
+
+.calendar-done {
+  color: #15803d;
+  font-weight: 600;
+}
+
+.calendar-late {
+  color: #dc2626;
+  font-weight: 600;
+}
+
+.calendar-stripe {
+  display: flex;
+  height: 5px;
+  border-radius: 3px;
+  overflow: hidden;
+  background: #eef2f6;
+  margin-top: auto;
+}
+
+.calendar-stripe i {
+  display: block;
+  height: 100%;
+}
+
+/* Окно дня календаря */
+.calendar-day-modal {
+  width: min(1100px, 100%);
+}
+
+.calendar-day-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 10px;
+}
+
+.calendar-day-empty {
+  padding: 40px 0;
+  text-align: center;
+  font-size: 13px;
+  color: #94a3b8;
+}
+
+.calendar-day-section-title {
+  margin: 16px 0 8px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.calendar-done-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
+  font-size: 12px;
+  color: #64748b;
+  cursor: pointer;
+  min-width: 0;
+}
+
+.calendar-done-row:hover {
+  border-color: #cbd5e1;
+  color: #334155;
+}
+
+.calendar-done-row b {
+  color: #475569;
+  white-space: nowrap;
+}
+
+.calendar-done-check {
+  display: inline-flex;
+  color: #16a34a;
+  flex-shrink: 0;
+}
+
+.calendar-done-client {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.calendar-done-printer {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.calendar-day-hint {
   font-size: 12px;
   color: #94a3b8;
 }

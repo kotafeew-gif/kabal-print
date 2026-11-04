@@ -15,6 +15,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Printer as PrinterIcon, Plus, X, ArrowLeftRight, Loader2, RotateCw } from 'lucide-react';
+import ModalShell from './Modal';
 import {
   MATERIALS,
   SHEET_PRESETS,
@@ -467,8 +468,7 @@ export default function PaperCutCalculator({ orderNumber, client, tz, parsed, on
   const sheetInvalid = !cW || !cH;
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-window pc-modal" onClick={(e) => e.stopPropagation()}>
+    <ModalShell className="pc-modal">
         <div className="modal-header">
           <div>
             <h2>Раскрой бумаги · заявка № {orderNumber}</h2>
@@ -859,8 +859,7 @@ export default function PaperCutCalculator({ orderNumber, client, tz, parsed, on
             <X size={15} /> Закрыть
           </button>
         </div>
-      </div>
-    </div>
+    </ModalShell>
   );
 }
 

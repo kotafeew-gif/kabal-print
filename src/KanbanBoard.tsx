@@ -1,26 +1,14 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Calendar,
-  CheckCircle2,
-  Copy,
-  FolderOpen,
-  Globe2,
-  Printer as PrinterIcon,
-  Undo2,
-  User,
-  X,
-} from 'lucide-react';
-import {
-  ORDER_STATUSES,
-  PRINTERS_CONFIG,
-  STATUS_BY_ID,
   NO_STATUS_COLOR,
+  ORDER_STATUSES,
   hexToRgba,
   parseDeadlineMs,
   getDeadlineState,
   type Order,
 } from './orderConfig';
 import type { ParsedTz } from './parseTz';
+import { OrderCard, OrderTzModal, orderCardKey } from './OrderCard';
 
 interface KanbanBoardProps {
   orders: Order[];
@@ -49,12 +37,6 @@ const SORT_OPTIONS: Array<{ id: SortKey; label: string }> = [
 ];
 
 const SORT_STORAGE_KEY = 'kabal-kanban-sort';
-
-function isRemoteResource(value: string): boolean {
-  return /^https?:\/\//i.test(String(value || '').trim());
-}
-
-const cardKey = (order: Order) => `${order.rowNumber}-${order.orderNumber}`;
 
 /** Сортировка карточек в колонке. Заявки без срока всегда в конце. */
 function compareOrders(a: Order, b: Order, sortKey: SortKey): number {
@@ -107,7 +89,7 @@ export default function KanbanBoard({
 
   const byKey = useMemo(() => {
     const map = new Map<string, Order>();
-    for (const order of activeOrders) map.set(cardKey(order), order);
+    for (const order of activeOrders) map.set(orderCardKey(order), order);
     return map;
   }, [activeOrders]);
 
@@ -140,7 +122,7 @@ export default function KanbanBoard({
   // Открытая карточка должна оставаться актуальной после перечитывания таблицы
   useEffect(() => {
     if (!openOrder) return;
-    const fresh = activeOrders.find((o) => cardKey(o) === cardKey(openOrder));
+    const fresh = activeOrders.find((o) => orderCardKey(o) === orderCardKey(openOrder));
     if (!fresh) {
       setOpenOrder(null);
       return;
@@ -166,7 +148,7 @@ export default function KanbanBoard({
   };
 
   const startDrag = (e: React.DragEvent, order: Order) => {
-    const key = cardKey(order);
+    const key = orderCardKey(order);
     setDragKey(key);
     justDraggedRef.current = true;
     e.dataTransfer.effectAllowed = 'move';
@@ -197,255 +179,6 @@ export default function KanbanBoard({
   const openCard = (order: Order) => {
     if (justDraggedRef.current) return;
     setOpenOrder(order);
-  };
-
-  const renderCard = (order: Order) => {
-    const parsed = parsedOrdersMap.get(order.rowNumber);
-    const printerConfig = PRINTERS_CONFIG[order.printer];
-    const deadlineState = getDeadlineState(order.deadline);
-    const key = cardKey(order);
-    const isMine = Boolean(currentPrinter) && order.printer === currentPrinter;
-
-    return (
-      <article
-        key={key}
-        className={`kanban-card ${dragKey === key ? 'dragging' : ''} ${order.printer ? 'claimed' : 'free'}`}
-        draggable
-        onDragStart={(e) => startDrag(e, order)}
-        onDragEnd={endDrag}
-        onClick={() => openCard(order)}
-        title="Нажмите, чтобы открыть ТЗ · перетащите в колонку, чтобы сменить статус"
-      >
-        <div className="kanban-card-head">
-          <span className="kanban-card-num">№ {order.orderNumber}</span>
-          {order.manager && <span className="kanban-card-manager">{order.manager}</span>}
-        </div>
-
-        <div className="kanban-card-client" title={order.client}>
-          {order.client || '—'}
-        </div>
-
-        <div className="kanban-card-meta">
-          <span className="kanban-card-product" title={parsed?.product || ''}>
-            {parsed?.product || '—'}
-          </span>
-          <span className="kanban-card-qty" title={parsed?.quantity || ''}>
-            {parsed?.quantity || '—'}
-          </span>
-        </div>
-
-        <div className={`kanban-card-deadline ${deadlineState}`}>
-          <Calendar size={12} />
-          <span className="kanban-card-deadline-text">{order.deadline || 'без срока'}</span>
-          {deadlineState === 'today' && <span className="kanban-flag today">сегодня</span>}
-          {deadlineState === 'overdue' && <span className="kanban-flag overdue">просрочено</span>}
-        </div>
-
-        <div className="kanban-card-footer">
-          {order.printer ? (
-            <span className={`status-badge kanban-printer-chip ${printerConfig?.badgeClass || 'badge-claimed'}`}>
-              <User size={12} />
-              {printerConfig?.label || order.printer}
-            </span>
-          ) : (
-            <span className="status-badge badge-free kanban-printer-chip">
-              <span className="pulse-dot" />
-              Свободна
-            </span>
-          )}
-
-          <div className="kanban-card-actions">
-            {parsed?.folderPath && (
-              <button
-                className="kanban-icon-btn"
-                title={`Открыть папку: ${parsed.folderPath}`}
-                onClick={(e) => onOpenFolder(parsed.folderPath, e)}
-              >
-                {isRemoteResource(parsed.folderPath) ? <Globe2 size={13} /> : <FolderOpen size={13} />}
-              </button>
-            )}
-            <button className="kanban-icon-btn" title="Распечатать техкарту" onClick={(e) => onPrint(order, e)}>
-              <PrinterIcon size={13} />
-            </button>
-            {!order.printer && (
-              <button
-                className="kanban-claim-btn"
-                onClick={(e) => onClaim(order, e)}
-                disabled={!currentPrinter}
-                title={currentPrinter ? `Взять заказ на ${PRINTERS_CONFIG[currentPrinter]?.label}` : 'Выберите себя в меню «Печатник»'}
-              >
-                Взять
-              </button>
-            )}
-            {isMine && (
-              <button className="kanban-done-btn" title="Отметить заказ выполненным" onClick={(e) => onComplete(order, e)}>
-                <CheckCircle2 size={13} />
-                Готово
-              </button>
-            )}
-          </div>
-        </div>
-      </article>
-    );
-  };
-
-  // ── Окно с ТЗ открытой карточки ────────────────────────────────────────────
-  const renderModal = () => {
-    if (!openOrder) return null;
-    const order = openOrder;
-    const parsed = parsedOrdersMap.get(order.rowNumber);
-    const printerConfig = PRINTERS_CONFIG[order.printer];
-    const statusConfig = order.status ? STATUS_BY_ID[order.status] : undefined;
-    const deadlineState = getDeadlineState(order.deadline);
-    const isMine = Boolean(currentPrinter) && order.printer === currentPrinter;
-
-    return (
-      <div className="modal-overlay" onClick={() => setOpenOrder(null)}>
-        <div className="modal-window kanban-modal" onClick={(e) => e.stopPropagation()}>
-          <div className="modal-header">
-            <div>
-              <h2>Заявка № {order.orderNumber}</h2>
-              <p className="modal-sub">
-                {order.client || '—'}
-                {order.manager ? ` · менеджер: ${order.manager}` : ''}
-              </p>
-            </div>
-            <button className="btn-modal-close" onClick={() => setOpenOrder(null)} title="Закрыть (Esc)">
-              <X size={20} />
-            </button>
-          </div>
-
-          <div className="modal-body">
-            <div className="kanban-modal-status-row">
-              <label className="kanban-modal-status-label">
-                <span>Статус:</span>
-                <select
-                  className={`status-select ${statusConfig ? statusConfig.badgeClass : 'status-empty'}`}
-                  value={order.status || ''}
-                  onChange={(e) => onStatusChange(order, e.target.value)}
-                >
-                  <option value="">— статус —</option>
-                  {ORDER_STATUSES.map((item) => (
-                    <option key={item.id} value={item.id}>
-                      {item.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <span className="kanban-modal-printer">
-                <span>Печатник:</span>
-                {order.printer ? (
-                  <span className={`status-badge ${printerConfig?.badgeClass || 'badge-claimed'}`}>
-                    <User size={12} />
-                    {printerConfig?.label || order.printer}
-                  </span>
-                ) : (
-                  <span className="status-badge badge-free">
-                    <span className="pulse-dot" />
-                    Свободна
-                  </span>
-                )}
-              </span>
-            </div>
-
-            <div className="modal-fact-grid">
-              <div className="modal-fact-card">
-                <span className="fact-title">Срок сдачи</span>
-                <span
-                  className={`fact-data ${deadlineState === 'overdue' ? 'fact-danger' : ''} ${
-                    deadlineState === 'today' ? 'fact-warn' : ''
-                  }`}
-                >
-                  {order.deadline || '—'}
-                </span>
-              </div>
-              <div className="modal-fact-card">
-                <span className="fact-title">Дата постановки</span>
-                <span className="fact-data">{order.created || '—'}</span>
-              </div>
-              <div className="modal-fact-card">
-                <span className="fact-title">Вид продукции</span>
-                <span className="fact-data">{parsed?.product || '—'}</span>
-              </div>
-              <div className="modal-fact-card">
-                <span className="fact-title">Тираж</span>
-                <span className="fact-data">{parsed?.quantity || '—'}</span>
-              </div>
-              <div className="modal-fact-card">
-                <span className="fact-title">Материал</span>
-                <span className="fact-data">{parsed?.paper || '—'}</span>
-              </div>
-              <div className="modal-fact-card">
-                <span className="fact-title">Цветность</span>
-                <span className="fact-data">{order.colorMode || parsed?.color || '—'}</span>
-              </div>
-            </div>
-
-            {parsed?.lamination && parsed.lamination !== '—' && (
-              <div className="modal-note-box">
-                {/^ламинац/i.test(parsed.lamination) ? parsed.lamination : `Ламинация: ${parsed.lamination}`}
-              </div>
-            )}
-            {order.note && <div className="modal-note-box">Примечание: {order.note}</div>}
-
-            <div className="modal-tz-section">
-              <h3>ТЗ из ячейки</h3>
-              <pre>{order.tz}</pre>
-            </div>
-          </div>
-
-          <div className="modal-footer">
-            <div className="kanban-modal-footer-left">
-              {parsed?.folderPath && (
-                <button className="btn-print" onClick={(e) => onOpenFolder(parsed.folderPath, e)}>
-                  {isRemoteResource(parsed.folderPath) ? <Globe2 size={14} /> : <FolderOpen size={14} />}
-                  Папка
-                </button>
-              )}
-              <button className="btn-print" onClick={(e) => onPrint(order, e)}>
-                <PrinterIcon size={14} />
-                Распечатать
-              </button>
-              <button
-                className="btn-print"
-                onClick={() => navigator.clipboard?.writeText(order.tz)}
-                title="Скопировать текст ТЗ"
-              >
-                <Copy size={14} />
-                Копировать ТЗ
-              </button>
-            </div>
-
-            <div className="kanban-modal-footer-right">
-              {!order.printer && (
-                <button
-                  className="btn-claim-large"
-                  onClick={(e) => onClaim(order, e)}
-                  disabled={!currentPrinter}
-                  title={currentPrinter ? '' : 'Выберите себя в меню «Печатник»'}
-                >
-                  Взять в работу{currentPrinter ? ` (${PRINTERS_CONFIG[currentPrinter]?.label})` : ''}
-                </button>
-              )}
-              {isMine && (
-                <>
-                  <button className="btn-done-large" onClick={(e) => onComplete(order, e)}>
-                    <CheckCircle2 size={15} /> Завершить
-                  </button>
-                  <button className="btn-unclaim-large" onClick={(e) => onUnclaim(order, e)}>
-                    <Undo2 size={15} /> Отказаться
-                  </button>
-                </>
-              )}
-              <button className="btn-secondary" onClick={() => setOpenOrder(null)}>
-                Закрыть
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
   };
 
   return (
@@ -513,7 +246,24 @@ export default function KanbanBoard({
                     {col.key === '' ? 'Все заявки распределены' : 'Перетащите заявку сюда'}
                   </div>
                 ) : (
-                  items.map(renderCard)
+                  items.map((order) => (
+                    <Fragment key={orderCardKey(order)}>
+                      <OrderCard
+                        order={order}
+                        parsed={parsedOrdersMap.get(order.rowNumber)}
+                        currentPrinter={currentPrinter}
+                        dragging={dragKey === orderCardKey(order)}
+                        draggable
+                        onDragStart={startDrag}
+                        onDragEnd={endDrag}
+                        onOpen={openCard}
+                        onClaim={onClaim}
+                        onComplete={onComplete}
+                        onOpenFolder={onOpenFolder}
+                        onPrint={onPrint}
+                      />
+                    </Fragment>
+                  ))
                 )}
               </div>
             </section>
@@ -521,7 +271,20 @@ export default function KanbanBoard({
         })}
       </div>
 
-      {renderModal()}
+      {openOrder && (
+        <OrderTzModal
+          order={openOrder}
+          parsed={parsedOrdersMap.get(openOrder.rowNumber)}
+          currentPrinter={currentPrinter}
+          onClose={() => setOpenOrder(null)}
+          onStatusChange={onStatusChange}
+          onClaim={onClaim}
+          onUnclaim={onUnclaim}
+          onComplete={onComplete}
+          onOpenFolder={onOpenFolder}
+          onPrint={onPrint}
+        />
+      )}
     </div>
   );
 }

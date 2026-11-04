@@ -45,6 +45,8 @@ import {
   type Order,
 } from './orderConfig';
 import KanbanBoard from './KanbanBoard';
+import CalendarBoard from './CalendarBoard';
+import ModalShell from './Modal';
 
 export type { Order } from './orderConfig';
 export { PRINTERS_CONFIG, ORDER_STATUSES, STATUS_BY_ID, hexToRgba } from './orderConfig';
@@ -275,10 +277,12 @@ export default function App() {
   const [tagPanelOpen, setTagPanelOpen] = useState(false);
   const [tagSearch, setTagSearch] = useState('');
   const [expandedCats, setExpandedCats] = useState<Record<string, boolean>>({ operation: true });
-  // Активная вкладка: таблица заявок или Канбан-доска (запоминается между запусками)
-  const [view, setView] = useState<'table' | 'kanban'>(() => {
+  // Активная вкладка: таблица заявок, Канбан-доска или Календарь (запоминается между запусками)
+  const [view, setView] = useState<'table' | 'kanban' | 'calendar'>(() => {
     try {
-      return localStorage.getItem('kabal-view') === 'kanban' ? 'kanban' : 'table';
+      const saved = localStorage.getItem('kabal-view');
+      if (saved === 'kanban' || saved === 'calendar') return saved;
+      return 'table';
     } catch {
       return 'table';
     }
@@ -1659,6 +1663,18 @@ export default function App() {
           Канбан
           <span className="view-tab-count">{filteredOrders.filter((o) => !o.completed).length}</span>
         </button>
+        <button
+          className={`view-tab ${view === 'calendar' ? 'active' : ''}`}
+          onClick={() => {
+            setView('calendar');
+            try {
+              localStorage.setItem('kabal-view', 'calendar');
+            } catch {}
+          }}
+        >
+          Календарь
+          <span className="view-tab-count">{orders.filter((o) => !o.completed).length}</span>
+        </button>
       </div>
 
       {/* Пакетное взятие: появляется, когда выделены свободные заявки */}
@@ -2345,6 +2361,23 @@ export default function App() {
         </main>
       )}
 
+      {/* Календарь: заявки по дням срока сдачи (все заявки, фильтры не действуют) */}
+      {view === 'calendar' && (
+        <main className="orders-wrapper">
+          <CalendarBoard
+            orders={orders}
+            parsedOrdersMap={parsedOrdersMap}
+            currentPrinter={printer}
+            onStatusChange={handleSetStatus}
+            onClaim={handleClaim}
+            onUnclaim={handleUnclaim}
+            onComplete={handleComplete}
+            onOpenFolder={handleOpenFolder}
+            onPrint={handlePrintCard}
+          />
+        </main>
+      )}
+
       {/* Окно обновления: прогресс загрузки и автоперезапуск */}
       {updateState && ['available', 'downloading', 'downloaded', 'error'].includes(updateState.status) && (
         <div className="update-overlay">
@@ -2443,8 +2476,7 @@ export default function App() {
 
       {/* Форма завершения заявки: F/G/H/I */}
       {completeTarget && (
-        <div className="modal-overlay" onClick={closeCompleteForm}>
-          <div className="modal-window complete-modal" onClick={(e) => e.stopPropagation()}>
+        <ModalShell className="complete-modal">
             <div className="modal-header">
               <div>
                 <h2>Завершение заявки № {completeTarget.orderNumber}</h2>
@@ -2568,8 +2600,7 @@ export default function App() {
                 </button>
               </div>
             </div>
-          </div>
-        </div>
+        </ModalShell>
       )}
 
       {/* Раскрой бумаги: полный калькулятор (paper-calc-pro) */}

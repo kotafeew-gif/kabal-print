@@ -18,6 +18,7 @@ import {
   type SheetSpec,
 } from './cutCalc';
 import { BIG_SHEETS, MACHINES, machineMaxLength, optimizeSheets, piecesFromBig } from './sheetOptimizer';
+import ModalShell from './Modal';
 import type { ParsedTz } from './parseTz';
 
 /** Цвета видов изделий — по кругу, различимы на печати. */
@@ -434,8 +435,7 @@ export default function CutCalculator({ orderNumber, client, tz, parsed, onWrite
   };
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-window cut-modal" onClick={(e) => e.stopPropagation()}>
+    <ModalShell className="cut-modal">
         <div className="modal-header">
           <div>
             <h2>Предрасчёт · заявка № {orderNumber}</h2>
@@ -818,7 +818,6 @@ export default function CutCalculator({ orderNumber, client, tz, parsed, onWrite
             </button>
           </div>
         </div>
-      </div>
-    </div>
+    </ModalShell>
   );
 }
