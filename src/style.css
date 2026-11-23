@@ -1439,6 +1439,11 @@ body {
   color: #1a4f9e;
 }
 
+.badge-saveliy {
+  background: #e9e9b8;
+  color: #4a4a00;
+}
+
 .badge-claimed {
   background: #e0f2fe;
   color: #0369a1;

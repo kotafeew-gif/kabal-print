@@ -17,8 +17,8 @@ const SHEET_TITLE = 'Печать_2026';
 const KEY_PATH = app.isPackaged
   ? path.join(process.resourcesPath, 'google-key.json')
   : path.join(__dirname, '../credentials/google-key.json');
-const PRINTERS = { в: { label: 'Валера', color: { red: 0.761, green: 0.482, blue: 0.627 } }, к: { label: 'Андрей', color: { red: 0, green: 1, blue: 1 } }, m: { label: 'Коля', color: { red: 0.29, green: 0.525, blue: 0.91 } } };
-const PRINTER_NAME_TO_KEY = { 'Валера': 'в', 'Андрей': 'к', 'Коля': 'm' };
+const PRINTERS = { в: { label: 'Валера', color: { red: 0.761, green: 0.482, blue: 0.627 } }, к: { label: 'Андрей', color: { red: 0, green: 1, blue: 1 } }, m: { label: 'Коля', color: { red: 0.29, green: 0.525, blue: 0.91 } }, с: { label: 'Савелий', color: { red: 0.502, green: 0.502, blue: 0 } } };
+const PRINTER_NAME_TO_KEY = { 'Валера': 'в', 'Андрей': 'к', 'Коля': 'm', 'Савелий': 'с' };
 const DONE_COLOR = { red: 1, green: 1, blue: 0 }; // #ffff00
 
 // Статусы производства («Подряд», «Монтаж», …) хранятся в отдельном служебном

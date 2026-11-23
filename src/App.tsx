@@ -267,7 +267,8 @@ export default function App() {
   }, [queryInput, query]);
   const [sortBy, setSortBy] = useState<string>('deadline');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
-  const [statusFilter, setStatusFilter] = useState<'all' | 'free' | 'my' | 'my-free' | 'в' | 'к' | 'm'>('all');
+  // Значение — id фильтра ('all'/'free'/'my'/'my-free') либо ключ печатника из PRINTERS_CONFIG
+  const [statusFilter, setStatusFilter] = useState<string>('all');
   const [materialFilter, setMaterialFilter] = useState<string>('all');
   const [laminationFilter, setLaminationFilter] = useState<string>('all');
   const [laminationKind, setLaminationKind] = useState<string>('all');
@@ -1050,9 +1051,9 @@ export default function App() {
           if (!printer) return false;
           if (order.printer && order.printer !== printer) return false;
         }
-        if (statusFilter === 'в' && order.printer !== 'в') return false;
-        if (statusFilter === 'к' && order.printer !== 'к') return false;
-        if (statusFilter === 'm' && order.printer !== 'm') return false;
+        // Фильтр по конкретному печатнику: ключ берётся из PRINTERS_CONFIG,
+        // чтобы новый печатник не требовал правки здесь.
+        if (PRINTERS_CONFIG[statusFilter] && order.printer !== statusFilter) return false;
 
         const parsed = parsedOrdersMap.get(order.rowNumber);
 
@@ -1452,9 +1453,11 @@ export default function App() {
               <option value="free">🟢 Только свободные (не в работе)</option>
               {printer && <option value="my">👤 Только мои ({PRINTERS_CONFIG[printer]?.label})</option>}
               {printer && <option value="my-free">👤 Мои и свободные ({PRINTERS_CONFIG[printer]?.label})</option>}
-              <option value="в">Валера (в)</option>
-              <option value="к">Андрей (к)</option>
-              <option value="m">Коля (m)</option>
+              {Object.entries(PRINTERS_CONFIG).map(([key, config]) => (
+                <option key={key} value={key}>
+                  {config.label} ({key})
+                </option>
+              ))}
             </select>
           </div>
 

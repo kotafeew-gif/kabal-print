@@ -27,6 +27,10 @@ export const PRINTERS_CONFIG: Record<string, { label: string; color: string; bad
   в: { label: 'Валера', color: '#c27ba0', badgeClass: 'badge-valera' },
   к: { label: 'Андрей', color: '#00ffff', badgeClass: 'badge-andrey' },
   m: { label: 'Коля', color: '#4a86e8', badgeClass: 'badge-kolya' },
+  // Савелий: оливковый — самый далёкий по цвету от трёх «наших» и от шести статусов
+  // (ΔE ≥ 54 до ближайшего #eab308 «Согласование»), при этом чёрный текст на заливке
+  // в листе читается (контраст ~5:1).
+  с: { label: 'Савелий', color: '#808000', badgeClass: 'badge-saveliy' },
 };
 
 export interface OrderStatusConfig {
